@@ -43,3 +43,4 @@ Thumbs.db
 # Frontend
 frontend/node_modules/
 frontend/dist/
+src/scythe_transcribe/web_dist/

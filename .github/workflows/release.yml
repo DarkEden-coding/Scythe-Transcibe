@@ -1,0 +1,75 @@
+name: Build Release
+
+on:
+  release:
+    types: [created]
+
+# Required to upload artifacts to the release
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: Scythe-Transcribe-macOS.zip
+          - os: windows-latest
+            artifact: Scythe-Transcribe-Windows.zip
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.os }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv sync --all-groups
+
+      # ── Build ──────────────────────────────────────────────────────────────
+
+      - name: Build (macOS / Windows)
+        run: uv run python build.py
+
+      # ── Package ────────────────────────────────────────────────────────────
+
+      - name: Package — macOS (.app → zip)
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          zip -r --symlinks "${{ matrix.artifact }}" Scythe-Transcribe.app
+
+      - name: Package — Windows (dir → zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path   "dist\scythe-transcribe" `
+            -DestinationPath "dist\${{ matrix.artifact }}"
+
+      # ── Upload to release ──────────────────────────────────────────────────
+
+      - name: Upload artifact to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact }}
