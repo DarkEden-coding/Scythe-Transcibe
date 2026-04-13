@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,6 +42,12 @@ class ApiKeysUpdate(BaseModel):
 
     groq: str | None = None
     openrouter: str | None = None
+
+
+class RuntimeIconOverrideUpdate(BaseModel):
+    """Manual OS tray/menu-bar icon override; null follows backend capture state."""
+
+    override_state: Literal["idle", "recording", "processing"] | None = None
 
 
 def _static_root() -> Path | None:
@@ -223,6 +229,42 @@ def create_app(frontend_activity: FrontendActivity | None = None) -> FastAPI:
             }
         except Exception:
             return {"supported": False, "trusted": True, "hotkey": {"state": "unknown"}}
+
+    @app.get("/api/runtime-state")
+    def get_runtime_state() -> dict[str, Any]:
+        """Return live runtime diagnostics for the frontend."""
+        from scythe_transcribe.hotkey_service import (
+            get_hotkey_listener_status,
+            start_hotkey_listener,
+        )
+        from scythe_transcribe.runtime_icon import get_icon_status
+
+        start_hotkey_listener()
+        hotkey = get_hotkey_listener_status()
+        icon = get_icon_status()
+        capture_state = str(hotkey.get("capture_state") or "idle")
+        return {
+            "icon_state": icon["display_state"],
+            "capture_state": capture_state,
+            "capturing_audio": capture_state == "recording",
+            "processing_audio": capture_state == "processing",
+            "os_icon": icon,
+            "hotkey": hotkey,
+        }
+
+    @app.post("/api/runtime-icon/cycle")
+    def cycle_runtime_icon() -> dict[str, Any]:
+        """Cycle the manual OS tray/menu-bar icon override."""
+        from scythe_transcribe.runtime_icon import cycle_icon_override
+
+        return {"os_icon": cycle_icon_override()}
+
+    @app.put("/api/runtime-icon/override")
+    def put_runtime_icon_override(body: RuntimeIconOverrideUpdate) -> dict[str, Any]:
+        """Set or clear the manual OS tray/menu-bar icon override."""
+        from scythe_transcribe.runtime_icon import set_icon_override
+
+        return {"os_icon": set_icon_override(body.override_state)}
 
     @app.post("/api/accessibility/open-settings")
     def open_accessibility_settings() -> dict[str, str]:

@@ -17,7 +17,8 @@ block_cipher = None
 
 ROOT = Path(SPECPATH)
 SRC  = ROOT / "src"
-ICON_BLUE = ROOT / "icon-blue.webp"
+PACKAGE_DIR = SRC / "scythe_transcribe"
+ICON_BLUE = PACKAGE_DIR / "icon-blue.webp"
 
 # ── Data files ────────────────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ except Exception:
 
 # Runtime icon assets used by the tray and hotkey state switcher.
 for icon_name in ("icon-blue.webp", "icon-red.webp", "icon-yellow.webp"):
-    icon_path = ROOT / icon_name
+    icon_path = PACKAGE_DIR / icon_name
     if icon_path.is_file():
         datas.append((str(icon_path), "scythe_transcribe"))
 

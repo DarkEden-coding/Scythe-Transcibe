@@ -24,11 +24,12 @@ ROOT = Path(__file__).resolve().parent
 FRONTEND     = ROOT / "frontend"
 FRONTEND_OUT = FRONTEND / "dist"
 WEB_DIST_PKG = ROOT / "src" / "scythe_transcribe" / "web_dist"
+PACKAGE_DIR = ROOT / "src" / "scythe_transcribe"
 FRONTEND_PUBLIC = FRONTEND / "public"
 ICON_ASSETS = [
-    ROOT / "icon-blue.webp",
-    ROOT / "icon-red.webp",
-    ROOT / "icon-yellow.webp",
+    PACKAGE_DIR / "icon-blue.webp",
+    PACKAGE_DIR / "icon-red.webp",
+    PACKAGE_DIR / "icon-yellow.webp",
 ]
 
 

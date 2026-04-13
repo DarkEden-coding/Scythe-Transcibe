@@ -23,6 +23,30 @@ _status_lock = threading.Lock()
 _listener_status: dict[str, Any] = {
     "state": "stopped",
     "error": None,
+    "capture_state": "idle",
+    "capture_state_changed_at": None,
+    "configured_combo": "",
+    "combo_parts": [],
+    "pressed_tokens": [],
+    "combo_active": False,
+    "last_event": None,
+    "last_token": None,
+    "last_key": None,
+    "last_event_at": None,
+    "last_combo_matched_at": None,
+    "last_recording_started_at": None,
+    "last_recording_stopped_at": None,
+    "last_stream_error": None,
+    "last_stream_error_at": None,
+    "last_transcribe_error": None,
+    "last_transcribe_error_at": None,
+    "event_count": 0,
+    "listener_backend": "",
+    "listener_backend_error": None,
+    "secure_input_enabled": False,
+    "last_raw_event_type": None,
+    "last_raw_keycode": None,
+    "last_raw_flags": None,
 }
 
 _HOTKEY_RETRY_SECONDS = 2.0
@@ -84,6 +108,24 @@ def is_accessibility_trusted() -> bool:
         return True
 
 
+def is_secure_input_enabled() -> bool:
+    """Return whether macOS Secure Event Input is blocking keyboard event taps."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        import ctypes
+        import ctypes.util
+
+        lib_path = ctypes.util.find_library("Carbon") or ctypes.util.find_library("HIToolbox")
+        if not lib_path:
+            return False
+        lib = ctypes.cdll.LoadLibrary(lib_path)
+        lib.IsSecureEventInputEnabled.restype = ctypes.c_bool
+        return bool(lib.IsSecureEventInputEnabled())
+    except Exception:
+        return False
+
+
 def request_accessibility_trust_prompt() -> bool:
     """Ask macOS to prompt for Accessibility trust for this process."""
     if sys.platform != "darwin":
@@ -101,6 +143,7 @@ def get_hotkey_listener_status() -> dict[str, Any]:
     with _status_lock:
         status = dict(_listener_status)
     status["accessibility_trusted"] = is_accessibility_trusted()
+    status["secure_input_enabled"] = is_secure_input_enabled()
     return status
 
 
@@ -114,6 +157,104 @@ def _set_listener_status(state: str, error: str | None = None) -> None:
         )
 
 
+def _set_listener_backend(backend: str, error: str | None = None) -> None:
+    with _status_lock:
+        _listener_status.update(
+            {
+                "listener_backend": backend,
+                "listener_backend_error": error,
+            }
+        )
+
+
+def _record_darwin_raw_event(event_type: int, event: object) -> None:
+    try:
+        from Quartz import CGEventGetFlags, CGEventGetIntegerValueField, kCGKeyboardEventKeycode
+
+        keycode = int(CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode))
+        flags = int(CGEventGetFlags(event))
+    except Exception:
+        return
+    with _status_lock:
+        _listener_status.update(
+            {
+                "last_raw_event_type": int(event_type),
+                "last_raw_keycode": keycode,
+                "last_raw_flags": flags,
+            }
+        )
+
+
+def _set_capture_state(state: str) -> None:
+    with _status_lock:
+        if _listener_status.get("capture_state") == state:
+            return
+        _listener_status.update(
+            {
+                "capture_state": state,
+                "capture_state_changed_at": time.time(),
+            }
+        )
+
+
+def _pressed_tokens(counts: dict[str, int]) -> list[str]:
+    return sorted(token for token, count in counts.items() if count > 0)
+
+
+def _record_hotkey_event(
+    *,
+    event: str,
+    key: object | None,
+    token: str | None,
+    configured_combo: str,
+    combo_parts: list[str],
+    counts: dict[str, int],
+    combo_active: bool,
+) -> None:
+    now = time.time()
+    with _status_lock:
+        event_count = int(_listener_status.get("event_count") or 0) + 1
+        update: dict[str, Any] = {
+            "configured_combo": configured_combo,
+            "combo_parts": list(combo_parts),
+            "pressed_tokens": _pressed_tokens(counts),
+            "combo_active": combo_active,
+            "last_event": event,
+            "last_token": token,
+            "last_key": repr(key),
+            "last_event_at": now,
+            "event_count": event_count,
+        }
+        if combo_active:
+            update["last_combo_matched_at"] = now
+        _listener_status.update(update)
+
+
+def _record_stream_error(exc: Exception) -> None:
+    with _status_lock:
+        _listener_status.update(
+            {
+                "last_stream_error": f"{type(exc).__name__}: {exc}",
+                "last_stream_error_at": time.time(),
+            }
+        )
+
+
+def _record_transcribe_error(exc: Exception) -> None:
+    with _status_lock:
+        _listener_status.update(
+            {
+                "last_transcribe_error": f"{type(exc).__name__}: {exc}",
+                "last_transcribe_error_at": time.time(),
+            }
+        )
+
+
+def _record_recording_boundary(name: str) -> None:
+    with _status_lock:
+        _listener_status[name] = time.time()
+
+
 def _ensure_keyboard_api() -> dict[str, Any]:
     """Import pynput and build keyboard lookup tables on first actual use."""
     if _keyboard_api:
@@ -122,6 +263,60 @@ def _ensure_keyboard_api() -> dict[str, Any]:
         if _keyboard_api:
             return _keyboard_api
         from pynput.keyboard import Controller, Key, KeyCode, Listener
+
+        listener_backend = "pynput"
+        ListenerImpl = Listener
+        if sys.platform == "darwin":
+            try:
+                from pynput._util import darwin as darwin_util
+                from pynput.keyboard._darwin import Listener as DarwinListener
+                from Quartz import kCGHIDEventTap
+
+                class DarwinHIDListener(DarwinListener):  # type: ignore[misc]
+                    _SCYTHE_BACKEND = "quartz-hid"
+
+                    def _create_event_tap(self) -> object:
+                        tap = darwin_util.CGEventTapCreate(
+                            kCGHIDEventTap,
+                            darwin_util.kCGHeadInsertEventTap,
+                            (
+                                darwin_util.kCGEventTapOptionListenOnly
+                                if (
+                                    True
+                                    and not self.suppress
+                                    and self._intercept is None
+                                )
+                                else darwin_util.kCGEventTapOptionDefault
+                            ),
+                            self._EVENTS,
+                            self._handler,
+                            None,
+                        )
+                        if tap is not None:
+                            _set_listener_backend(self._SCYTHE_BACKEND)
+                            return tap
+                        _set_listener_backend(
+                            "quartz-session",
+                            "HID event tap unavailable; fell back to session event tap",
+                        )
+                        return super()._create_event_tap()
+
+                    def _handle_message(
+                        self,
+                        proxy: object,
+                        event_type: int,
+                        event: object,
+                        refcon: object,
+                        injected: bool,
+                    ) -> None:
+                        _record_darwin_raw_event(event_type, event)
+                        super()._handle_message(proxy, event_type, event, refcon, injected)
+
+                ListenerImpl = DarwinHIDListener
+                listener_backend = DarwinHIDListener._SCYTHE_BACKEND
+            except Exception as exc:
+                listener_backend = "pynput-darwin-session"
+                _set_listener_backend(listener_backend, f"{type(exc).__name__}: {exc}")
 
         _KEY_TO_TOKEN.update(
             {
@@ -154,7 +349,8 @@ def _ensure_keyboard_api() -> dict[str, Any]:
                 "Controller": Controller,
                 "Key": Key,
                 "KeyCode": KeyCode,
-                "Listener": Listener,
+                "Listener": ListenerImpl,
+                "listener_backend": listener_backend,
             }
         )
         return _keyboard_api
@@ -249,7 +445,9 @@ def _paste_at_cursor(text: str, suppress_until: list[float]) -> None:
 
 def _run_hotkey_loop() -> None:
     """Listen for hold-to-talk; on release run transcribe + paste in a worker thread."""
-    Listener = _ensure_keyboard_api()["Listener"]
+    api = _ensure_keyboard_api()
+    Listener = api["Listener"]
+    _set_listener_backend(str(api.get("listener_backend") or "pynput"))
 
     combo_parts: list[str] = []
     counts: dict[str, int] = defaultdict(int)
@@ -258,6 +456,7 @@ def _run_hotkey_loop() -> None:
     chunks_holder: list[list[Any]] = [[]]
     transcribing = threading.Event()
     suppress_until: list[float] = [0.0]
+    _set_capture_state("idle")
     set_icon_state("idle")
 
     def is_suppressed() -> bool:
@@ -304,6 +503,7 @@ def _run_hotkey_loop() -> None:
         if transcribing.is_set():
             return
         transcribing.set()
+        _set_capture_state("processing")
         set_icon_state("processing")
         try:
             from scythe_transcribe.transcribe_pipeline import (
@@ -329,10 +529,11 @@ def _run_hotkey_loop() -> None:
                     "hotkey_paste_chord_ms": paste_chord_ms,
                 },
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            _record_transcribe_error(exc)
         finally:
             transcribing.clear()
+            _set_capture_state("idle")
             set_icon_state("idle")
 
     def on_press(key: object | None) -> None:
@@ -341,11 +542,30 @@ def _run_hotkey_loop() -> None:
             return
         if transcribing.is_set():
             return
+        configured_combo = load_preferences().hotkey_toggle_recording
+        combo_parts[:] = _parse_hotkey_combo(configured_combo)
         tok = _key_event_token(key)
         if not tok:
+            _record_hotkey_event(
+                event="press",
+                key=key,
+                token=None,
+                configured_combo=configured_combo,
+                combo_parts=combo_parts,
+                counts=counts,
+                combo_active=False,
+            )
             return
-        combo_parts[:] = _parse_hotkey_combo(load_preferences().hotkey_toggle_recording)
         if not combo_parts:
+            _record_hotkey_event(
+                event="press",
+                key=key,
+                token=tok,
+                configured_combo=configured_combo,
+                combo_parts=combo_parts,
+                counts=counts,
+                combo_active=False,
+            )
             return
         if tok in _MODIFIER_TOKENS:
             counts[tok] = counts.get(tok, 0) + 1
@@ -353,11 +573,25 @@ def _run_hotkey_loop() -> None:
             counts[tok] = 1
 
         active = combo_requirements_met()
+        _record_hotkey_event(
+            event="press",
+            key=key,
+            token=tok,
+            configured_combo=configured_combo,
+            combo_parts=combo_parts,
+            counts=counts,
+            combo_active=active,
+        )
         if active and not prev_active:
             try:
                 start_stream()
+                _set_capture_state("recording")
+                _record_recording_boundary("last_recording_started_at")
                 set_icon_state("recording")
-            except Exception:
+            except Exception as exc:
+                _record_stream_error(exc)
+                _set_capture_state("idle")
+                set_icon_state("idle")
                 prev_active = False
                 return
         prev_active = active
@@ -366,10 +600,20 @@ def _run_hotkey_loop() -> None:
         nonlocal prev_active
         if is_suppressed():
             return
+        configured_combo = load_preferences().hotkey_toggle_recording
+        combo_parts[:] = _parse_hotkey_combo(configured_combo)
         tok = _key_event_token(key)
         if not tok:
+            _record_hotkey_event(
+                event="release",
+                key=key,
+                token=None,
+                configured_combo=configured_combo,
+                combo_parts=combo_parts,
+                counts=counts,
+                combo_active=combo_requirements_met(),
+            )
             return
-        combo_parts[:] = _parse_hotkey_combo(load_preferences().hotkey_toggle_recording)
         if tok in _MODIFIER_TOKENS:
             if counts.get(tok, 0) > 0:
                 counts[tok] -= 1
@@ -379,14 +623,26 @@ def _run_hotkey_loop() -> None:
             counts.pop(tok, None)
 
         active = combo_requirements_met()
+        _record_hotkey_event(
+            event="release",
+            key=key,
+            token=tok,
+            configured_combo=configured_combo,
+            combo_parts=combo_parts,
+            counts=counts,
+            combo_active=active,
+        )
         if prev_active and not active:
             samples = stop_stream()
+            _record_recording_boundary("last_recording_stopped_at")
             min_samps = int(16_000 * 0.12)
             if samples.size >= min_samps and not transcribing.is_set():
                 wav_bytes = _float32_mono_to_wav_bytes(samples, 16_000)
+                _set_capture_state("processing")
                 set_icon_state("processing")
                 threading.Thread(target=worker_transcribe, args=(wav_bytes,), daemon=True).start()
             else:
+                _set_capture_state("idle")
                 set_icon_state("idle")
         prev_active = active
 
@@ -399,15 +655,18 @@ def _run_hotkey_manager() -> None:
     while True:
         if not is_accessibility_trusted():
             _set_listener_status("waiting_for_accessibility")
+            _set_capture_state("idle")
             time.sleep(_HOTKEY_RETRY_SECONDS)
             continue
         try:
             _set_listener_status("running")
             _run_hotkey_loop()
+            _set_capture_state("idle")
             _set_listener_status("stopped")
             return
         except Exception as exc:
             _set_listener_status("error", f"{type(exc).__name__}: {exc}")
+            _set_capture_state("idle")
             set_icon_state("idle")
             time.sleep(_HOTKEY_RETRY_SECONDS)
 

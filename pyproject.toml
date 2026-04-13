@@ -32,7 +32,7 @@ scythe-transcribe = "scythe_transcribe.main:run_app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-scythe_transcribe = ["web_dist/*", "web_dist/**/*"]
+scythe_transcribe = ["web_dist/*", "web_dist/**/*", "*.webp"]
 
 [tool.ruff]
 line-length = 100

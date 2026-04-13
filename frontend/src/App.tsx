@@ -1,9 +1,51 @@
-import type { CSSProperties, PointerEvent } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { startMicRecording } from "./audio";
 import { OpenRouterModelPicker, type OrModel } from "./OpenRouterModelPicker";
 
 type TabId = "general" | "keys" | "transcribe" | "postprocess" | "output";
+type RuntimeIconState = "idle" | "recording" | "processing";
+type RuntimeIconStatus = {
+  base_state: RuntimeIconState;
+  override_state: RuntimeIconState | null;
+  display_state: RuntimeIconState;
+};
+type HotkeyDiagnostics = {
+  state?: string;
+  error?: string | null;
+  accessibility_trusted?: boolean;
+  capture_state?: RuntimeIconState | string;
+  configured_combo?: string;
+  combo_parts?: string[];
+  pressed_tokens?: string[];
+  combo_active?: boolean;
+  last_event?: string | null;
+  last_token?: string | null;
+  last_key?: string | null;
+  last_event_at?: number | null;
+  last_combo_matched_at?: number | null;
+  last_recording_started_at?: number | null;
+  last_recording_stopped_at?: number | null;
+  last_stream_error?: string | null;
+  last_stream_error_at?: number | null;
+  last_transcribe_error?: string | null;
+  last_transcribe_error_at?: number | null;
+  event_count?: number;
+  listener_backend?: string;
+  listener_backend_error?: string | null;
+  secure_input_enabled?: boolean;
+  last_raw_event_type?: number | null;
+  last_raw_keycode?: number | null;
+  last_raw_flags?: number | null;
+};
+type RuntimeState = {
+  icon_state: RuntimeIconState;
+  capture_state: RuntimeIconState;
+  capturing_audio: boolean;
+  processing_audio?: boolean;
+  os_icon: RuntimeIconStatus;
+  hotkey?: HotkeyDiagnostics;
+};
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "general", label: "General" },
@@ -241,6 +283,65 @@ function formatHotkeyLabel(combo: string): string {
     .join("+");
 }
 
+function runtimeIconSrc(state: RuntimeIconState): string {
+  if (state === "recording") return "/icon-red.webp";
+  if (state === "processing") return "/icon-yellow.webp";
+  return "/icon-blue.webp";
+}
+
+function runtimeIconColor(state: RuntimeIconState): string {
+  if (state === "recording") return "#e53935";
+  if (state === "processing") return "#ffb300";
+  return "#42a5f5";
+}
+
+function formatRuntimeIconState(state: RuntimeIconState): string {
+  if (state === "recording") return "Recording";
+  if (state === "processing") return "Processing";
+  return "Idle";
+}
+
+function formatDiagnosticTime(seconds?: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds)) return "Never";
+  return new Date(seconds * 1000).toLocaleTimeString();
+}
+
+function formatDiagnosticList(values?: string[]): string {
+  return values && values.length > 0 ? values.join("+") : "None";
+}
+
+function formatDiagnosticBool(value?: boolean): string {
+  if (value === undefined) return "Unknown";
+  return value ? "Yes" : "No";
+}
+
+function formatRawKeyEvent(diagnostics?: HotkeyDiagnostics): string {
+  if (
+    diagnostics?.last_raw_event_type == null &&
+    diagnostics?.last_raw_keycode == null &&
+    diagnostics?.last_raw_flags == null
+  ) {
+    return "None";
+  }
+  return [
+    diagnostics.last_raw_event_type == null ? null : `type ${diagnostics.last_raw_event_type}`,
+    diagnostics.last_raw_keycode == null ? null : `vk ${diagnostics.last_raw_keycode}`,
+    diagnostics.last_raw_flags == null ? null : `flags ${diagnostics.last_raw_flags}`,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function preventModifiedButtonActivation(e: ReactKeyboardEvent<HTMLButtonElement>) {
+  if (
+    (e.key === " " || e.key === "Enter" || e.code === "Space" || e.code === "Enter") &&
+    (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey)
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}
+
 /** Matches `text_replacements.parse_replacement_spec` (first arrow only). */
 const KEYWORD_LINE =
   /^(.*?)\s*(?:->|=>|→|⇒|\t)\s*(.*)$/s;
@@ -315,6 +416,7 @@ export function App() {
   const [accessibilitySupported, setAccessibilitySupported] = useState(false);
   const [accessibilityIdentity, setAccessibilityIdentity] =
     useState<AccessibilityIdentity | null>(null);
+  const [runtimeState, setRuntimeState] = useState<RuntimeState | null>(null);
   const [groqTranscribeCustomOpen, setGroqTranscribeCustomOpen] = useState(false);
   const [orTranscribeManualOpen, setOrTranscribeManualOpen] = useState(false);
   const [postCustomModelOpen, setPostCustomModelOpen] = useState(false);
@@ -332,6 +434,15 @@ export function App() {
 
   const setPref = useCallback(<K extends keyof AppPreferences>(k: K, v: AppPreferences[K]) => {
     setPrefs((p) => ({ ...p, [k]: v }));
+  }, []);
+
+  const refreshRuntimeState = useCallback(async () => {
+    try {
+      const runtime = await apiJson<RuntimeState>("/api/runtime-state");
+      setRuntimeState(runtime);
+    } catch {
+      setRuntimeState(null);
+    }
   }, []);
 
   const refreshAccessibility = useCallback(async () => {
@@ -463,6 +574,29 @@ export function App() {
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [refreshAccessibility]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const runtime = await apiJson<RuntimeState>("/api/runtime-state");
+        if (!cancelled) {
+          setRuntimeState(runtime);
+        }
+      } catch {
+        if (!cancelled) {
+          setRuntimeState(null);
+        }
+      }
+    };
+    void refresh();
+    const id = window.setInterval(refresh, 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -626,11 +760,18 @@ export function App() {
 
   const isGroq = prefs.transcription_provider === "groq";
   const postGroq = prefs.postprocess_provider === "groq";
-  const statusIconSrc = busy
-    ? "/icon-yellow.webp"
+  const actualIconState: RuntimeIconState = busy
+    ? "processing"
     : recording
-      ? "/icon-red.webp"
-      : "/icon-blue.webp";
+      ? "recording"
+      : runtimeState?.capture_state ?? "idle";
+  const statusIconSrc = runtimeIconSrc(actualIconState);
+  const statusIconStyle = { color: runtimeIconColor(actualIconState) } as CSSProperties;
+  const osIconOverride = runtimeState?.os_icon?.override_state ?? null;
+  const toolbarIconPreviewLabel =
+    osIconOverride === null ? "Follow backend" : formatRuntimeIconState(osIconOverride);
+  const hotkeyDiagnostics = runtimeState?.hotkey;
+  const osIconStatus = runtimeState?.os_icon;
   const accessibilityGrantTarget =
     accessibilityIdentity?.app_bundle ?? accessibilityIdentity?.executable ?? "";
 
@@ -655,7 +796,14 @@ export function App() {
           <h1 className="app-title">Scythe-Transcribe</h1>
           <div className="app-header-spacer" aria-hidden />
           <div className="status-pill" style={{ color: statusColor }}>
-            <img className="status-icon" src={statusIconSrc} alt="" aria-hidden />
+            <img
+              key={statusIconSrc}
+              className="status-icon"
+              src={statusIconSrc}
+              style={statusIconStyle}
+              alt=""
+              aria-hidden
+            />
             <span>{status}</span>
           </div>
         </header>
@@ -777,6 +925,133 @@ export function App() {
               <span className="muted">
                 Automatically start Scythe-Transcribe when you log in.
               </span>
+            </div>
+
+            <h2 className="section-title section-title--spaced">Diagnostics</h2>
+            <div className="diagnostic-row">
+              <div className="diagnostic-status">
+                <span className="field-inline-label">Backend audio capture</span>
+                <span
+                  className={
+                    runtimeState?.capturing_audio
+                      ? "diagnostic-pill diagnostic-pill--active"
+                      : "diagnostic-pill"
+                  }
+                >
+                  <span className="diagnostic-dot" aria-hidden />
+                  {runtimeState === null
+                    ? "Runtime status unavailable"
+                    : runtimeState.capturing_audio
+                      ? "Capturing audio"
+                      : "Not capturing"}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn-outline"
+                onKeyDown={preventModifiedButtonActivation}
+                onKeyUp={preventModifiedButtonActivation}
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      await apiJson<{ os_icon: RuntimeIconStatus }>("/api/runtime-icon/cycle", {
+                        method: "POST",
+                      });
+                      await refreshRuntimeState();
+                    } catch (e) {
+                      setStatus(e instanceof Error ? e.message : String(e));
+                      setStatusColor("#c62828");
+                    }
+                  })();
+                }}
+              >
+                Cycle macOS icon: {toolbarIconPreviewLabel}
+              </button>
+            </div>
+
+            <div className="diagnostic-grid">
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Hotkey listener</span>
+                <strong>{hotkeyDiagnostics?.state ?? "Unknown"}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Listener backend</span>
+                <strong>{hotkeyDiagnostics?.listener_backend || "Unknown"}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Accessibility trusted</span>
+                <strong>{formatDiagnosticBool(hotkeyDiagnostics?.accessibility_trusted)}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Secure input</span>
+                <strong>{formatDiagnosticBool(hotkeyDiagnostics?.secure_input_enabled)}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Capture state</span>
+                <strong>{runtimeState?.capture_state ?? "unknown"}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">OS icon</span>
+                <strong>
+                  {osIconStatus
+                    ? `${osIconStatus.display_state}${
+                        osIconStatus.override_state ? " override" : " follows backend"
+                      }`
+                    : "unknown"}
+                </strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Configured shortcut</span>
+                <strong>{hotkeyDiagnostics?.configured_combo || "None"}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Backend parsed shortcut</span>
+                <strong>{formatDiagnosticList(hotkeyDiagnostics?.combo_parts)}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Pressed tokens</span>
+                <strong>{formatDiagnosticList(hotkeyDiagnostics?.pressed_tokens)}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Combo active</span>
+                <strong>{formatDiagnosticBool(hotkeyDiagnostics?.combo_active)}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Last key event</span>
+                <strong>
+                  {hotkeyDiagnostics?.last_event
+                    ? `${hotkeyDiagnostics.last_event}: ${hotkeyDiagnostics.last_token ?? "unknown"}`
+                    : "None"}
+                </strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Raw key event</span>
+                <strong>{formatRawKeyEvent(hotkeyDiagnostics)}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Last event time</span>
+                <strong>{formatDiagnosticTime(hotkeyDiagnostics?.last_event_at)}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Event count</span>
+                <strong>{hotkeyDiagnostics?.event_count ?? 0}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Last combo match</span>
+                <strong>{formatDiagnosticTime(hotkeyDiagnostics?.last_combo_matched_at)}</strong>
+              </div>
+              <div className="diagnostic-item diagnostic-item--wide">
+                <span className="field-inline-label">Last stream error</span>
+                <strong>{hotkeyDiagnostics?.last_stream_error || "None"}</strong>
+              </div>
+              <div className="diagnostic-item diagnostic-item--wide">
+                <span className="field-inline-label">Listener backend error</span>
+                <strong>{hotkeyDiagnostics?.listener_backend_error || "None"}</strong>
+              </div>
+              <div className="diagnostic-item diagnostic-item--wide">
+                <span className="field-inline-label">Last transcription error</span>
+                <strong>{hotkeyDiagnostics?.last_transcribe_error || "None"}</strong>
+              </div>
             </div>
           </div>
           )}
