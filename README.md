@@ -1,6 +1,6 @@
 # Scythe-Transcribe
 
-Local speech-to-text for **Windows** and **macOS**: a **React** web UI in your browser talks to a **FastAPI** server on your machine. Record from the microphone in the browser, transcribe with **Groq** (Whisper) or **OpenRouter** (audio-capable chat models), optionally run a follow-up **LLM** step, and apply a personal **keyword dictionary**. API keys and preferences are stored in JSON files under your user config directory (optional `.env` for keys).
+Cloud speech-to-text for **Windows** and **macOS**: a **React** web UI in your browser talks to a **FastAPI** server on your machine. Record from the microphone in the browser, transcribe with **Groq** (Whisper) or **OpenRouter** (audio-capable chat models), optionally run a follow-up **LLM** step, and apply a personal **keyword dictionary**. API keys and preferences are stored in JSON files under your user config directory (optional `.env` for keys).
 
 ## Requirements
 
