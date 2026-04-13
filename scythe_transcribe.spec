@@ -17,6 +17,7 @@ block_cipher = None
 
 ROOT = Path(SPECPATH)
 SRC  = ROOT / "src"
+ICON_BLUE = ROOT / "icon-blue.webp"
 
 # ── Data files ────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,12 @@ try:
     datas += collect_data_files("_sounddevice_data")
 except Exception:
     pass
+
+# Runtime icon assets used by the tray and hotkey state switcher.
+for icon_name in ("icon-blue.webp", "icon-red.webp", "icon-yellow.webp"):
+    icon_path = ROOT / icon_name
+    if icon_path.is_file():
+        datas.append((str(icon_path), "scythe_transcribe"))
 
 # ── Hidden imports ────────────────────────────────────────────────────────────
 
@@ -169,7 +176,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file="entitlements.plist" if sys.platform == "darwin" else None,
-    icon=None,
+    icon=str(ICON_BLUE) if ICON_BLUE.is_file() else None,
 )
 
 # ── Collect (one-dir bundle) ──────────────────────────────────────────────────
@@ -191,7 +198,7 @@ if sys.platform == "darwin":
     app = BUNDLE(  # noqa: F821
         coll,
         name="Scythe-Transcribe.app",
-        icon=None,
+        icon=str(ICON_BLUE) if ICON_BLUE.is_file() else None,
         bundle_identifier="com.scythe-transcribe.app",
         info_plist={
             # LSUIElement=True → background app: menu-bar only, no Dock icon

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import plistlib
 import subprocess
 import sys
 from pathlib import Path
-
 
 _PLIST_LABEL = "com.scythe-transcribe.app"
 _PLIST_NAME = f"{_PLIST_LABEL}.plist"
@@ -31,32 +31,39 @@ def _script_args() -> list[str]:
     return ["-m", "scythe_transcribe"]
 
 
-def _plist_xml(executable: str, args: list[str]) -> str:
-    argv = [executable] + args
-    args_xml = "\n".join(f"        <string>{a}</string>" for a in argv)
-    return f"""\
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>{_PLIST_LABEL}</string>
-    <key>ProgramArguments</key>
-    <array>
-{args_xml}
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <false/>
-    <key>StandardOutPath</key>
-    <string>{Path.home() / "Library" / "Logs" / "scythe-transcribe.log"}</string>
-    <key>StandardErrorPath</key>
-    <string>{Path.home() / "Library" / "Logs" / "scythe-transcribe-error.log"}</string>
-</dict>
-</plist>
-"""
+def _macos_app_bundle_path(executable: str | None = None) -> Path | None:
+    """Return the containing .app bundle when running from one."""
+    current = Path(executable or sys.executable).resolve()
+    for path in (current, *current.parents):
+        if path.suffix == ".app" and (path / "Contents" / "Info.plist").is_file():
+            return path
+    return None
+
+
+def _macos_program_arguments() -> list[str]:
+    """Return LaunchAgent ProgramArguments for the current macOS app."""
+    if getattr(sys, "frozen", False):
+        app_bundle = _macos_app_bundle_path()
+        if app_bundle is not None:
+            # Launch the bundle, not Contents/MacOS/scythe-transcribe directly.
+            # Accessibility/TCC grants are attached to the app identity users see
+            # in System Settings.
+            return ["/usr/bin/open", "-g", str(app_bundle)]
+    return [_executable(), *_script_args()]
+
+
+def _plist_xml(argv: list[str]) -> str:
+    payload = {
+        "Label": _PLIST_LABEL,
+        "ProgramArguments": argv,
+        "RunAtLoad": True,
+        "KeepAlive": False,
+        "StandardOutPath": str(Path.home() / "Library" / "Logs" / "scythe-transcribe.log"),
+        "StandardErrorPath": str(
+            Path.home() / "Library" / "Logs" / "scythe-transcribe-error.log"
+        ),
+    }
+    return plistlib.dumps(payload).decode("utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -71,9 +78,7 @@ def _macos_is_enabled() -> bool:
 def _macos_enable() -> None:
     agents_dir = _launch_agents_dir()
     agents_dir.mkdir(parents=True, exist_ok=True)
-    exe = _executable()
-    args = _script_args()
-    _plist_path().write_text(_plist_xml(exe, args), encoding="utf-8")
+    _plist_path().write_text(_plist_xml(_macos_program_arguments()), encoding="utf-8")
     try:
         subprocess.run(
             ["launchctl", "load", str(_plist_path())],

@@ -24,6 +24,12 @@ ROOT = Path(__file__).resolve().parent
 FRONTEND     = ROOT / "frontend"
 FRONTEND_OUT = FRONTEND / "dist"
 WEB_DIST_PKG = ROOT / "src" / "scythe_transcribe" / "web_dist"
+FRONTEND_PUBLIC = FRONTEND / "public"
+ICON_ASSETS = [
+    ROOT / "icon-blue.webp",
+    ROOT / "icon-red.webp",
+    ROOT / "icon-yellow.webp",
+]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -48,11 +54,19 @@ def _run(*cmd: str, cwd: Path | None = None) -> None:
     subprocess.run(list(cmd), cwd=cwd, check=True)
 
 
+def _sync_frontend_icons() -> None:
+    """Copy the root icon assets into Vite's public directory."""
+    FRONTEND_PUBLIC.mkdir(parents=True, exist_ok=True)
+    for src in ICON_ASSETS:
+        shutil.copy2(src, FRONTEND_PUBLIC / src.name)
+
+
 # ── build steps ───────────────────────────────────────────────────────────────
 
 
 def build_frontend() -> None:
     print("\n── 1/3  Build frontend (npm) ────────────────────────────────")
+    _sync_frontend_icons()
     npm = _npm()
     if not (FRONTEND / "node_modules").is_dir():
         print("  Installing npm dependencies...")

@@ -46,6 +46,12 @@ type KeysPublic = {
   openrouter_configured: boolean;
 };
 
+type AccessibilityIdentity = {
+  app_bundle?: string | null;
+  executable?: string | null;
+  pid?: number;
+};
+
 type TranscriptionHistoryEntry = {
   id: string;
   createdAt: number;
@@ -307,6 +313,8 @@ export function App() {
   const [startupLoading, setStartupLoading] = useState(false);
   const [accessibilityTrusted, setAccessibilityTrusted] = useState(true);
   const [accessibilitySupported, setAccessibilitySupported] = useState(false);
+  const [accessibilityIdentity, setAccessibilityIdentity] =
+    useState<AccessibilityIdentity | null>(null);
   const [groqTranscribeCustomOpen, setGroqTranscribeCustomOpen] = useState(false);
   const [orTranscribeManualOpen, setOrTranscribeManualOpen] = useState(false);
   const [postCustomModelOpen, setPostCustomModelOpen] = useState(false);
@@ -324,6 +332,21 @@ export function App() {
 
   const setPref = useCallback(<K extends keyof AppPreferences>(k: K, v: AppPreferences[K]) => {
     setPrefs((p) => ({ ...p, [k]: v }));
+  }, []);
+
+  const refreshAccessibility = useCallback(async () => {
+    try {
+      const ax = await apiJson<{
+        supported: boolean;
+        trusted: boolean;
+        identity?: AccessibilityIdentity;
+      }>("/api/accessibility");
+      setAccessibilitySupported(ax.supported);
+      setAccessibilityTrusted(ax.trusted);
+      setAccessibilityIdentity(ax.identity ?? null);
+    } catch {
+      /* accessibility endpoint may not be supported on this platform */
+    }
   }, []);
 
   const commitKeywordRows = useCallback(
@@ -417,13 +440,7 @@ export function App() {
         } catch {
           /* startup endpoint may not be supported on this platform */
         }
-        try {
-          const ax = await apiJson<{ supported: boolean; trusted: boolean }>("/api/accessibility");
-          setAccessibilitySupported(ax.supported);
-          setAccessibilityTrusted(ax.trusted);
-        } catch {
-          /* ignore */
-        }
+        await refreshAccessibility();
       } catch (e) {
         setStatus(`Load failed: ${e instanceof Error ? e.message : String(e)}`);
         setStatusColor("#c62828");
@@ -431,7 +448,21 @@ export function App() {
         setHydrated(true);
       }
     })();
-  }, []);
+  }, [refreshAccessibility]);
+
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void refreshAccessibility();
+      }
+    };
+    window.addEventListener("focus", refreshAccessibility);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refreshAccessibility);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [refreshAccessibility]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -595,6 +626,13 @@ export function App() {
 
   const isGroq = prefs.transcription_provider === "groq";
   const postGroq = prefs.postprocess_provider === "groq";
+  const statusIconSrc = busy
+    ? "/icon-yellow.webp"
+    : recording
+      ? "/icon-red.webp"
+      : "/icon-blue.webp";
+  const accessibilityGrantTarget =
+    accessibilityIdentity?.app_bundle ?? accessibilityIdentity?.executable ?? "";
 
   const groqModelInDefaults = GROQ_STT_DEFAULTS.includes(
     prefs.transcription_model_groq as (typeof GROQ_STT_DEFAULTS)[number],
@@ -616,11 +654,8 @@ export function App() {
         <header className="app-header">
           <h1 className="app-title">Scythe-Transcribe</h1>
           <div className="app-header-spacer" aria-hidden />
-          <div className="status-pill">
-            <span
-              className="status-dot"
-              style={{ background: statusColor, color: statusColor }}
-            />
+          <div className="status-pill" style={{ color: statusColor }}>
+            <img className="status-icon" src={statusIconSrc} alt="" aria-hidden />
             <span>{status}</span>
           </div>
         </header>
@@ -705,14 +740,22 @@ export function App() {
               <>
                 <h2 className="section-title section-title--spaced">Accessibility permission</h2>
                 <p className="muted">
-                  This process is not trusted. Input event monitoring (hotkey) will not work until
-                  it is added to accessibility clients.
+                  macOS is not trusting the running Scythe-Transcribe process. Global hotkeys will
+                  start automatically after Accessibility is granted for this app.
                 </p>
+                {accessibilityGrantTarget && (
+                  <p className="muted">
+                    Current app: <code>{accessibilityGrantTarget}</code>
+                  </p>
+                )}
                 <button
                   type="button"
                   className="btn-primary"
                   onClick={() => {
-                    void apiJson("/api/accessibility/open-settings", { method: "POST" });
+                    void (async () => {
+                      await apiJson("/api/accessibility/open-settings", { method: "POST" });
+                      window.setTimeout(() => void refreshAccessibility(), 1000);
+                    })();
                   }}
                 >
                   Open Accessibility Settings
@@ -1023,6 +1066,7 @@ export function App() {
                   disabled={busy}
                   onClick={() => void onRecordClick()}
                 >
+                  <img className="action-button-icon" src={statusIconSrc} alt="" aria-hidden />
                   {recording ? "Stop & transcribe" : "Start recording"}
                 </button>
               </div>

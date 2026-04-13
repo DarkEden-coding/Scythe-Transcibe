@@ -245,10 +245,11 @@ a {
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-.status-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+.status-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: cover;
+  border-radius: 999px;
   flex-shrink: 0;
   box-shadow: 0 0 10px currentColor;
 }
@@ -447,6 +448,9 @@ a {
 }
 
 .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-control);
   border: none;
@@ -473,6 +477,13 @@ a {
 .btn-primary:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.action-button-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .btn-outline {

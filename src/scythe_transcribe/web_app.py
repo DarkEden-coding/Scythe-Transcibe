@@ -204,20 +204,25 @@ def create_app(frontend_activity: FrontendActivity | None = None) -> FastAPI:
         import sys
 
         if sys.platform != "darwin":
-            return {"supported": False, "trusted": True}
+            return {"supported": False, "trusted": True, "hotkey": {"state": "unsupported"}}
         try:
-            import ctypes
-            import ctypes.util
+            from scythe_transcribe.hotkey_service import (
+                current_app_identity,
+                get_hotkey_listener_status,
+                is_accessibility_trusted,
+                start_hotkey_listener,
+            )
 
-            lib_path = ctypes.util.find_library("ApplicationServices")
-            if not lib_path:
-                return {"supported": False, "trusted": True}
-            lib = ctypes.cdll.LoadLibrary(lib_path)
-            lib.AXIsProcessTrusted.restype = ctypes.c_bool
-            trusted: bool = lib.AXIsProcessTrusted()
-            return {"supported": True, "trusted": trusted}
+            start_hotkey_listener()
+            trusted = is_accessibility_trusted()
+            return {
+                "supported": True,
+                "trusted": trusted,
+                "hotkey": get_hotkey_listener_status(),
+                "identity": current_app_identity(),
+            }
         except Exception:
-            return {"supported": False, "trusted": True}
+            return {"supported": False, "trusted": True, "hotkey": {"state": "unknown"}}
 
     @app.post("/api/accessibility/open-settings")
     def open_accessibility_settings() -> dict[str, str]:
@@ -227,6 +232,12 @@ def create_app(frontend_activity: FrontendActivity | None = None) -> FastAPI:
 
         if sys.platform != "darwin":
             return {"status": "unsupported"}
+        try:
+            from scythe_transcribe.hotkey_service import request_accessibility_trust_prompt
+
+            request_accessibility_trust_prompt()
+        except Exception:
+            pass
         subprocess.Popen(
             [
                 "open",

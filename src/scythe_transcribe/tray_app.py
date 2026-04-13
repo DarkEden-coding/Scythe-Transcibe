@@ -6,25 +6,18 @@ import webbrowser
 from typing import Any
 
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from scythe_transcribe.config import PUBLIC_BASE_URL
 from scythe_transcribe.hotkey_service import start_hotkey_listener
 from scythe_transcribe.http_server import LocalHttpServer
+from scythe_transcribe.runtime_icon import attach_tray_icon, resolve_icon_path
 
 
-def _make_tray_image(size: int = 64) -> Image.Image:
-    """Build a simple circular icon (Material-ish indigo)."""
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    margin = 4
-    draw.ellipse(
-        (margin, margin, size - margin, size - margin),
-        fill=(92, 107, 192, 255),
-        outline=(180, 190, 240, 255),
-        width=2,
-    )
-    return img
+def _load_icon_image(name: str) -> Image.Image:
+    """Load a tray icon from the project-root assets."""
+    with Image.open(resolve_icon_path(name)) as image:
+        return image.convert("RGBA")
 
 
 def run_tray() -> None:
@@ -84,7 +77,7 @@ def run_tray() -> None:
             pystray.MenuItem("Shutdown", shutdown),
         )
 
-    image = _make_tray_image()
+    image = _load_icon_image("icon-blue.webp")
     icon = pystray.Icon(
         "scythe-transcribe",
         image,
@@ -92,4 +85,5 @@ def run_tray() -> None:
         rebuild_menu(),
     )
     icon_holder["icon"] = icon
+    attach_tray_icon(icon)
     icon.run()

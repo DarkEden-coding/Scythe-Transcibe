@@ -3,19 +3,29 @@
 from __future__ import annotations
 
 import io
+import os
 import sys
 import threading
 import time
 import wave
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
+from scythe_transcribe.runtime_icon import set_icon_state
 from scythe_transcribe.settings_store import load_preferences, patch_transcription_history_entry
 
 _started = threading.Lock()
-_listener_started = False
+_listener_manager_started = False
 _keyboard_init_lock = threading.Lock()
 _keyboard_api: dict[str, Any] = {}
+_status_lock = threading.Lock()
+_listener_status: dict[str, Any] = {
+    "state": "stopped",
+    "error": None,
+}
+
+_HOTKEY_RETRY_SECONDS = 2.0
 
 _MODIFIER_TOKENS = frozenset({"ctrl", "alt", "shift", "meta"})
 
@@ -39,6 +49,69 @@ _SPACE_VKS = {32}
 # media/special action.  Without this table the KeyCode branch returns None and
 # the hotkey is silently ignored.
 _VK_TO_FKEY_TOKEN: dict[int, str] = {}
+
+
+def current_app_identity() -> dict[str, Any]:
+    """Return paths useful for matching this process to macOS privacy settings."""
+    executable = Path(sys.executable).resolve()
+    app_bundle = None
+    for path in (executable, *executable.parents):
+        if path.suffix == ".app" and (path / "Contents" / "Info.plist").is_file():
+            app_bundle = str(path)
+            break
+    return {
+        "pid": os.getpid(),
+        "executable": str(executable),
+        "app_bundle": app_bundle,
+    }
+
+
+def is_accessibility_trusted() -> bool:
+    """Return whether this process can receive macOS Accessibility input events."""
+    if sys.platform != "darwin":
+        return True
+    try:
+        import ctypes
+        import ctypes.util
+
+        lib_path = ctypes.util.find_library("ApplicationServices")
+        if not lib_path:
+            return True
+        lib = ctypes.cdll.LoadLibrary(lib_path)
+        lib.AXIsProcessTrusted.restype = ctypes.c_bool
+        return bool(lib.AXIsProcessTrusted())
+    except Exception:
+        return True
+
+
+def request_accessibility_trust_prompt() -> bool:
+    """Ask macOS to prompt for Accessibility trust for this process."""
+    if sys.platform != "darwin":
+        return True
+    try:
+        from Quartz import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
+
+        return bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))
+    except Exception:
+        return is_accessibility_trusted()
+
+
+def get_hotkey_listener_status() -> dict[str, Any]:
+    """Return diagnostic state for the background hotkey listener."""
+    with _status_lock:
+        status = dict(_listener_status)
+    status["accessibility_trusted"] = is_accessibility_trusted()
+    return status
+
+
+def _set_listener_status(state: str, error: str | None = None) -> None:
+    with _status_lock:
+        _listener_status.update(
+            {
+                "state": state,
+                "error": error,
+            }
+        )
 
 
 def _ensure_keyboard_api() -> dict[str, Any]:
@@ -185,6 +258,7 @@ def _run_hotkey_loop() -> None:
     chunks_holder: list[list[Any]] = [[]]
     transcribing = threading.Event()
     suppress_until: list[float] = [0.0]
+    set_icon_state("idle")
 
     def is_suppressed() -> bool:
         return time.monotonic() < suppress_until[0]
@@ -230,6 +304,7 @@ def _run_hotkey_loop() -> None:
         if transcribing.is_set():
             return
         transcribing.set()
+        set_icon_state("processing")
         try:
             from scythe_transcribe.transcribe_pipeline import (
                 text_to_paste,
@@ -258,10 +333,13 @@ def _run_hotkey_loop() -> None:
             pass
         finally:
             transcribing.clear()
+            set_icon_state("idle")
 
     def on_press(key: object | None) -> None:
         nonlocal prev_active
         if is_suppressed():
+            return
+        if transcribing.is_set():
             return
         tok = _key_event_token(key)
         if not tok:
@@ -278,6 +356,7 @@ def _run_hotkey_loop() -> None:
         if active and not prev_active:
             try:
                 start_stream()
+                set_icon_state("recording")
             except Exception:
                 prev_active = False
                 return
@@ -305,11 +384,32 @@ def _run_hotkey_loop() -> None:
             min_samps = int(16_000 * 0.12)
             if samples.size >= min_samps and not transcribing.is_set():
                 wav_bytes = _float32_mono_to_wav_bytes(samples, 16_000)
+                set_icon_state("processing")
                 threading.Thread(target=worker_transcribe, args=(wav_bytes,), daemon=True).start()
+            else:
+                set_icon_state("idle")
         prev_active = active
 
     with Listener(on_press=on_press, on_release=on_release) as listener:
         listener.join()
+
+
+def _run_hotkey_manager() -> None:
+    """Keep the hotkey listener alive once macOS Accessibility allows it."""
+    while True:
+        if not is_accessibility_trusted():
+            _set_listener_status("waiting_for_accessibility")
+            time.sleep(_HOTKEY_RETRY_SECONDS)
+            continue
+        try:
+            _set_listener_status("running")
+            _run_hotkey_loop()
+            _set_listener_status("stopped")
+            return
+        except Exception as exc:
+            _set_listener_status("error", f"{type(exc).__name__}: {exc}")
+            set_icon_state("idle")
+            time.sleep(_HOTKEY_RETRY_SECONDS)
 
 
 def start_hotkey_listener() -> None:
@@ -317,10 +417,14 @@ def start_hotkey_listener() -> None:
 
     Safe to call multiple times; only the first call has an effect.
     """
-    global _listener_started
+    global _listener_manager_started
     with _started:
-        if _listener_started:
+        if _listener_manager_started:
             return
-        t = threading.Thread(target=_run_hotkey_loop, daemon=True, name="scythe-hotkey")
+        t = threading.Thread(
+            target=_run_hotkey_manager,
+            daemon=True,
+            name="scythe-hotkey-manager",
+        )
         t.start()
-        _listener_started = True
+        _listener_manager_started = True
