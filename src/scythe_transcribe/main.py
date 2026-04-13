@@ -61,6 +61,12 @@ def run_app() -> None:
         # LaunchAgent / startup entry also fired).  Exit silently.
         sys.exit(0)
 
+    try:
+        import setproctitle
+        setproctitle.setproctitle("scythe-transcribe")
+    except Exception:
+        pass
+
     if os.environ.get("SCYTHE_SERVER_ONLY", "").strip().lower() in (
         "1",
         "true",
