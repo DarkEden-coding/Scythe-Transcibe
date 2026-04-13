@@ -9,6 +9,7 @@ import httpx
 
 from scythe_transcribe.config import postprocess_max_completion_tokens
 from scythe_transcribe.models import OpenRouterModelInfo
+from scythe_transcribe.prompts import OPENROUTER_TRANSCRIPTION_INSTRUCTION
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
@@ -144,7 +145,7 @@ def transcribe_with_audio_model(
     api_key: str,
     model: str,
     wav_bytes: bytes,
-    instruction: str = "Transcribe this audio accurately. Reply with only the transcript.",
+    instruction: str = OPENROUTER_TRANSCRIPTION_INSTRUCTION,
 ) -> str:
     """Transcribe by sending WAV as input_audio to a chat model.
 

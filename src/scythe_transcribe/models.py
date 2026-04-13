@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from scythe_transcribe.prompts import OPENROUTER_TRANSCRIPTION_INSTRUCTION
+
 
 class TranscriptionProvider(StrEnum):
     """Backend used for speech-to-text."""
@@ -43,9 +45,7 @@ class AppPreferences:
     postprocess_openrouter_reasoning_effort: str = ""
     openrouter_models_cache_hint: str = ""
     keyword_replacement_spec: str = ""
-    openrouter_transcription_instruction: str = (
-        "Transcribe this audio accurately. Reply with only the transcript."
-    )
+    openrouter_transcription_instruction: str = OPENROUTER_TRANSCRIPTION_INSTRUCTION
     hotkey_toggle_recording: str = "ctrl+shift+space"
 
     def to_json(self) -> dict[str, object]:

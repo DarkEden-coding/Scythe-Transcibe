@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from scythe_transcribe.models import AppPreferences, ChatProvider, TranscriptionProvider
+from scythe_transcribe.prompts import OPENROUTER_TRANSCRIPTION_INSTRUCTION
 
 
 def test_preferences_json_roundtrip() -> None:
@@ -34,4 +35,4 @@ def test_preferences_defaults_for_missing_keys() -> None:
     minimal = {"postprocess_enabled": False}
     p = AppPreferences.from_json(minimal)
     assert p.keyword_replacement_spec == ""
-    assert "Transcribe this audio" in p.openrouter_transcription_instruction
+    assert p.openrouter_transcription_instruction == OPENROUTER_TRANSCRIPTION_INSTRUCTION

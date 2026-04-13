@@ -161,8 +161,7 @@ const defaultPrefs = (): AppPreferences => ({
   postprocess_openrouter_reasoning_effort: "",
   openrouter_models_cache_hint: "",
   keyword_replacement_spec: "",
-  openrouter_transcription_instruction:
-    "Transcribe this audio accurately. Reply with only the transcript.",
+  openrouter_transcription_instruction: "",
   hotkey_toggle_recording: "ctrl+shift+space",
 });
 
@@ -308,6 +307,9 @@ export function App() {
   const [startupLoading, setStartupLoading] = useState(false);
   const [accessibilityTrusted, setAccessibilityTrusted] = useState(true);
   const [accessibilitySupported, setAccessibilitySupported] = useState(false);
+  const [groqTranscribeCustomOpen, setGroqTranscribeCustomOpen] = useState(false);
+  const [orTranscribeManualOpen, setOrTranscribeManualOpen] = useState(false);
+  const [postCustomModelOpen, setPostCustomModelOpen] = useState(false);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
 
@@ -581,7 +583,7 @@ export function App() {
       <div className="app-inner">
         <header className="app-header">
           <h1 className="app-title">Scythe-Transcribe</h1>
-          <div style={{ flex: 1 }} />
+          <div className="app-header-spacer" aria-hidden />
           <div className="status-pill">
             <span
               className="status-dot"
@@ -620,13 +622,13 @@ export function App() {
             aria-labelledby="tab-general"
           >
             <h2 className="section-title">Keyboard shortcuts</h2>
-            <p className="muted" style={{ marginTop: 0 }}>
+            <p className="muted">
               The desktop process captures this shortcut globally (hold to record, release to
               transcribe, post-process if enabled, then paste at the text cursor). Keep the settings
               server running from the tray app. Win/Meta combos may still be taken by the OS before
               Scythe sees them. Press Esc to cancel capture.
             </p>
-            <div className="field-row" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div className="field-row field-row--shortcut">
               <label className="flex-240">
                 Hold to dictate (paste)
                 <input
@@ -669,8 +671,8 @@ export function App() {
 
             {accessibilitySupported && !accessibilityTrusted && (
               <>
-                <h2 className="section-title" style={{ marginTop: "1.5rem" }}>Accessibility permission</h2>
-                <p className="muted" style={{ marginTop: 0 }}>
+                <h2 className="section-title section-title--spaced">Accessibility permission</h2>
+                <p className="muted">
                   This process is not trusted. Input event monitoring (hotkey) will not work until
                   it is added to accessibility clients.
                 </p>
@@ -686,9 +688,9 @@ export function App() {
               </>
             )}
 
-            <h2 className="section-title" style={{ marginTop: "1.5rem" }}>Startup</h2>
-            <div className="field-row" style={{ alignItems: "center" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
+            <h2 className="section-title section-title--spaced">Startup</h2>
+            <div className="field-row field-row--center field-row--meta">
+              <label className="inline-check">
                 <input
                   type="checkbox"
                   checked={startupEnabled}
@@ -697,7 +699,7 @@ export function App() {
                 />
                 Launch at login
               </label>
-              <span className="muted" style={{ marginLeft: "0.5rem" }}>
+              <span className="muted">
                 Automatically start Scythe-Transcribe when you log in.
               </span>
             </div>
@@ -711,8 +713,8 @@ export function App() {
             aria-labelledby="tab-keys"
           >
             <h2 className="section-title">API keys (stored in local file)</h2>
-            <div className="field-row">
-              <label className="flex-240">
+            <div className="panel-keys-fields">
+              <label className="panel-keys-label">
                 Groq API key
                 <input
                   type="password"
@@ -723,7 +725,7 @@ export function App() {
                   autoComplete="off"
                 />
               </label>
-              <label className="flex-240">
+              <label className="panel-keys-label">
                 OpenRouter API key
                 <input
                   type="password"
@@ -734,6 +736,8 @@ export function App() {
                   autoComplete="off"
                 />
               </label>
+            </div>
+            <div className="panel-keys-actions">
               <button type="button" className="btn-primary" onClick={() => void saveKeys()}>
                 Save keys
               </button>
@@ -741,7 +745,7 @@ export function App() {
                 Refresh OpenRouter models
               </button>
             </div>
-            <p className="muted">
+            <p className="muted panel-keys-footnote">
               Groq: {keys.groq_configured ? "key saved" : "no key"} · OpenRouter:{" "}
               {keys.openrouter_configured ? "key saved" : "no key"}
             </p>
@@ -757,72 +761,135 @@ export function App() {
             <div className="stack-gap">
               <div>
                 <h2 className="section-title">Transcription</h2>
-                <label>
-                  Provider
-                  <select
-                    className="input-field"
-                    style={{ width: 220 }}
-                    value={prefs.transcription_provider}
-                    onChange={(e) => setPref("transcription_provider", e.target.value)}
-                  >
-                    <option value="groq">Groq</option>
-                    <option value="openrouter">OpenRouter</option>
-                  </select>
-                </label>
-              </div>
-
-              {isGroq ? (
-                <>
-                  <div className="field-row">
-                    <label>
-                      Groq model
-                      <select
-                        className="input-field"
-                        style={{ width: 300 }}
-                        value={groqDropdownValue}
-                        onChange={(e) => setPref("transcription_model_groq", e.target.value)}
-                      >
-                        {GROQ_STT_DEFAULTS.map((m) => (
-                          <option key={m} value={m}>
-                            {m}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label style={{ flex: 1, minWidth: 200 }}>
-                      Custom Groq model id (optional)
-                      <input
-                        className="input-field"
-                        value={groqCustomValue}
-                        onChange={(e) => {
-                          const v = e.target.value.trim();
-                          setPref("transcription_model_groq", v || groqDropdownValue);
-                        }}
-                        placeholder="Overrides dropdown when set"
-                      />
-                    </label>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <OpenRouterModelPicker
-                    idBase="or-transcribe"
-                    label="OpenRouter model (audio input)"
-                    models={orModels}
-                    mode="audio"
-                    value={prefs.transcription_model_openrouter}
-                    onChange={(id) => setPref("transcription_model_openrouter", id)}
-                  />
-                  <label>
-                    Custom OpenRouter model id
-                    <input
-                      className="input-field"
-                      value={prefs.transcription_model_openrouter}
-                      onChange={(e) => setPref("transcription_model_openrouter", e.target.value)}
-                    />
+                <div className="provider-model-toolbar">
+                  <label className="field-inline field-inline--provider">
+                    <span className="field-inline-label">Provider</span>
+                    <select
+                      className="input-field input-field--toolbar"
+                      value={prefs.transcription_provider}
+                      onChange={(e) => setPref("transcription_provider", e.target.value)}
+                    >
+                      <option value="groq">Groq</option>
+                      <option value="openrouter">OpenRouter</option>
+                    </select>
                   </label>
-                  <label>
-                    OpenRouter transcription instruction
+                  <div className="provider-model-toolbar-main">
+                    {isGroq ? (
+                      <label className="field-inline">
+                        <span className="field-inline-label">Groq model</span>
+                        <select
+                          className="input-field input-field--toolbar"
+                          value={groqDropdownValue}
+                          onChange={(e) => setPref("transcription_model_groq", e.target.value)}
+                        >
+                          {GROQ_STT_DEFAULTS.map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <OpenRouterModelPicker
+                        idBase="or-transcribe"
+                        label="Model"
+                        models={orModels}
+                        mode="audio"
+                        value={prefs.transcription_model_openrouter}
+                        onChange={(id) => setPref("transcription_model_openrouter", id)}
+                      />
+                    )}
+                  </div>
+                </div>
+                <div className="provider-model-extra">
+                  {isGroq ? (
+                    groqModelInDefaults && !groqTranscribeCustomOpen ? (
+                      <button
+                        type="button"
+                        className="btn-link-caret"
+                        onClick={() => setGroqTranscribeCustomOpen(true)}
+                      >
+                        Custom Groq model ID…
+                      </button>
+                    ) : (
+                      <div className="custom-id-expand">
+                        <div className="custom-id-expand-head">
+                          <span className="field-inline-label" id="transcribe-groq-custom-lbl">
+                            Custom Groq model ID
+                          </span>
+                          {groqModelInDefaults ? (
+                            <button
+                              type="button"
+                              className="btn-link-quiet"
+                              onClick={() => setGroqTranscribeCustomOpen(false)}
+                            >
+                              Cancel
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn-link-quiet"
+                              onClick={() =>
+                                setPref("transcription_model_groq", groqDropdownValue)
+                              }
+                            >
+                              Use catalog model
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          id="transcribe-groq-custom"
+                          className="input-field"
+                          aria-labelledby="transcribe-groq-custom-lbl"
+                          value={groqCustomValue}
+                          onChange={(e) => {
+                            const v = e.target.value.trim();
+                            setPref("transcription_model_groq", v || groqDropdownValue);
+                          }}
+                          placeholder="Overrides catalog when set"
+                          autoComplete="off"
+                        />
+                      </div>
+                    )
+                  ) : !orTranscribeManualOpen ? (
+                    <button
+                      type="button"
+                      className="btn-link-caret"
+                      onClick={() => setOrTranscribeManualOpen(true)}
+                    >
+                      Enter model ID manually…
+                    </button>
+                  ) : (
+                    <div className="custom-id-expand">
+                      <div className="custom-id-expand-head">
+                        <span className="field-inline-label" id="transcribe-or-manual-lbl">
+                          Custom model ID
+                        </span>
+                        <button
+                          type="button"
+                          className="btn-link-quiet"
+                          onClick={() => setOrTranscribeManualOpen(false)}
+                        >
+                          Hide
+                        </button>
+                      </div>
+                      <input
+                        id="transcribe-or-manual"
+                        className="input-field"
+                        aria-labelledby="transcribe-or-manual-lbl"
+                        value={prefs.transcription_model_openrouter}
+                        onChange={(e) =>
+                          setPref("transcription_model_openrouter", e.target.value)
+                        }
+                        placeholder="e.g. vendor/model-id"
+                        autoComplete="off"
+                      />
+                    </div>
+                  )}
+                </div>
+                {!isGroq ? (
+                  <label className="field-inline" style={{ marginTop: "var(--space-4)" }}>
+                    <span className="field-inline-label">Transcription instruction</span>
                     <textarea
                       className="input-field"
                       style={{ minHeight: 72 }}
@@ -832,12 +899,12 @@ export function App() {
                       }
                     />
                   </label>
-                </>
-              )}
+                ) : null}
+              </div>
 
               <div>
                 <h2 className="section-title">Keyword dictionary</h2>
-                <p className="muted" style={{ marginTop: 0 }}>
+                <p className="muted">
                   Replace mistaken words or phrases in the raw transcript (before any LLM step). Longer
                   phrases are applied first. With Groq transcription, these terms are also sent as a
                   Whisper prompt so recognition can follow your vocabulary.
@@ -939,7 +1006,7 @@ export function App() {
           >
             <h2 className="section-title">LLM post-processing</h2>
             <div className="stack-gap">
-              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <label className="inline-check">
                 <input
                   type="checkbox"
                   checked={prefs.postprocess_enabled}
@@ -947,8 +1014,8 @@ export function App() {
                 />
                 Auto-process transcript with prompt
               </label>
-              <label>
-                Post-process prompt
+              <label className="field-inline">
+                <span className="postprocess-prompt-label">Post-process prompt</span>
                 <textarea
                   className="input-field"
                   style={{ minHeight: 80 }}
@@ -956,90 +1023,121 @@ export function App() {
                   onChange={(e) => setPref("postprocess_prompt", e.target.value)}
                 />
               </label>
-              <label>
-                Post-process provider
-                <select
-                  className="input-field"
-                  style={{ width: 220 }}
-                  value={prefs.postprocess_provider}
-                  onChange={(e) => setPref("postprocess_provider", e.target.value)}
-                >
-                  <option value="groq">Groq</option>
-                  <option value="openrouter">OpenRouter</option>
-                </select>
-              </label>
-
-              {postGroq ? (
-                <label>
-                  Groq post-process model
-                  <select
-                    className="input-field"
-                    value={prefs.postprocess_model}
-                    onChange={(e) => setPref("postprocess_model", e.target.value)}
-                  >
-                    <option value="">(select)</option>
-                    {groqChatModels.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : (
-                <OpenRouterModelPicker
-                  idBase="or-postprocess"
-                  label="OpenRouter post-process model"
-                  models={orModels}
-                  mode="all"
-                  value={prefs.postprocess_model}
-                  onChange={(id) => setPref("postprocess_model", id)}
-                />
-              )}
-              <label>
-                Custom post-process model id (optional override)
-                <input
-                  className="input-field"
-                  value={prefs.postprocess_model}
-                  onChange={(e) => setPref("postprocess_model", e.target.value)}
-                />
-              </label>
-              {postGroq ? (
-                <label>
-                  Groq reasoning effort
-                  <select
-                    className="input-field"
-                    style={{ width: 220 }}
-                    value={prefs.postprocess_groq_reasoning_effort}
-                    onChange={(e) => setPref("postprocess_groq_reasoning_effort", e.target.value)}
-                  >
-                    <option value="">Default (omit)</option>
-                    {GROQ_POST_REASONING_EFFORTS.filter((x) => x !== "").map((x) => (
-                      <option key={x} value={x}>
-                        {x}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : (
-                <label>
-                  OpenRouter reasoning effort
-                  <select
-                    className="input-field"
-                    style={{ width: 220 }}
-                    value={prefs.postprocess_openrouter_reasoning_effort}
-                    onChange={(e) =>
-                      setPref("postprocess_openrouter_reasoning_effort", e.target.value)
-                    }
-                  >
-                    <option value="">Default (omit)</option>
-                    {OR_POST_REASONING_EFFORTS.filter((x) => x !== "").map((x) => (
-                      <option key={x} value={x}>
-                        {x}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
+              <div>
+                <div className="provider-model-toolbar">
+                  <label className="field-inline field-inline--provider">
+                    <span className="field-inline-label">Provider</span>
+                    <select
+                      className="input-field input-field--toolbar"
+                      value={prefs.postprocess_provider}
+                      onChange={(e) => setPref("postprocess_provider", e.target.value)}
+                    >
+                      <option value="groq">Groq</option>
+                      <option value="openrouter">OpenRouter</option>
+                    </select>
+                  </label>
+                  <div className="provider-model-toolbar-main">
+                    {postGroq ? (
+                      <label className="field-inline">
+                        <span className="field-inline-label">Groq model</span>
+                        <select
+                          className="input-field input-field--toolbar"
+                          value={prefs.postprocess_model}
+                          onChange={(e) => setPref("postprocess_model", e.target.value)}
+                        >
+                          <option value="">(select)</option>
+                          {groqChatModels.map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <OpenRouterModelPicker
+                        idBase="or-postprocess"
+                        label="Model"
+                        models={orModels}
+                        mode="all"
+                        value={prefs.postprocess_model}
+                        onChange={(id) => setPref("postprocess_model", id)}
+                      />
+                    )}
+                  </div>
+                </div>
+                <div className="provider-model-extra">
+                  {!postCustomModelOpen ? (
+                    <button
+                      type="button"
+                      className="btn-link-caret"
+                      onClick={() => setPostCustomModelOpen(true)}
+                    >
+                      Custom model ID override…
+                    </button>
+                  ) : (
+                    <div className="custom-id-expand">
+                      <div className="custom-id-expand-head">
+                        <span className="field-inline-label" id="post-custom-model-lbl">
+                          Custom model ID
+                        </span>
+                        <button
+                          type="button"
+                          className="btn-link-quiet"
+                          onClick={() => setPostCustomModelOpen(false)}
+                        >
+                          Hide
+                        </button>
+                      </div>
+                      <input
+                        id="post-custom-model"
+                        className="input-field"
+                        aria-labelledby="post-custom-model-lbl"
+                        value={prefs.postprocess_model}
+                        onChange={(e) => setPref("postprocess_model", e.target.value)}
+                        placeholder="Overrides the selection above"
+                        autoComplete="off"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="postprocess-reasoning-row">
+                {postGroq ? (
+                  <label className="field-inline">
+                    <span className="field-inline-label">Groq reasoning effort</span>
+                    <select
+                      className="input-field input-field--toolbar"
+                      value={prefs.postprocess_groq_reasoning_effort}
+                      onChange={(e) => setPref("postprocess_groq_reasoning_effort", e.target.value)}
+                    >
+                      <option value="">Default (omit)</option>
+                      {GROQ_POST_REASONING_EFFORTS.filter((x) => x !== "").map((x) => (
+                        <option key={x} value={x}>
+                          {x}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <label className="field-inline">
+                    <span className="field-inline-label">OpenRouter reasoning effort</span>
+                    <select
+                      className="input-field input-field--toolbar"
+                      value={prefs.postprocess_openrouter_reasoning_effort}
+                      onChange={(e) =>
+                        setPref("postprocess_openrouter_reasoning_effort", e.target.value)
+                      }
+                    >
+                      <option value="">Default (omit)</option>
+                      {OR_POST_REASONING_EFFORTS.filter((x) => x !== "").map((x) => (
+                        <option key={x} value={x}>
+                          {x}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
               <p className="muted">
                 Reasoning options depend on the post-process model; unsupported values may be
                 ignored or rejected by the provider.

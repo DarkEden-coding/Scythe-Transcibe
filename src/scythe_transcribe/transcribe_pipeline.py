@@ -17,6 +17,10 @@ from scythe_transcribe.config import (
     POSTPROCESS_MAX_PARALLEL_CHUNKS,
 )
 from scythe_transcribe.models import AppPreferences, ChatProvider, TranscriptionProvider
+from scythe_transcribe.prompts import (
+    OPENROUTER_TRANSCRIPTION_INSTRUCTION,
+    OPENROUTER_TRANSCRIPTION_NONE_OUTPUT,
+)
 from scythe_transcribe.settings_store import (
     append_transcription_history,
     get_groq_api_key,
@@ -52,6 +56,8 @@ class TranscribeResponse(BaseModel):
 
     transcript: str
     processed: str | None = None
+    silence_detected: bool = False
+    asr_metadata: dict[str, object] | None = None
     id: str
     created_at: float
     transcript_chars: int = 0
@@ -229,6 +235,8 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
     pipeline_start = time.perf_counter()
     provider = job.transcription_provider
     transcript = ""
+    silence_detected = False
+    asr_metadata: dict[str, object] | None = None
 
     t_asr_start = time.perf_counter()
     if provider == TranscriptionProvider.GROQ.value:
@@ -237,12 +245,16 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
             raise HTTPException(status_code=400, detail="Groq API key not configured.")
         model = (job.transcription_model_groq or "").strip() or "whisper-large-v3-turbo"
         whisper_ctx = groq_asr_prompt_from_replacement_spec(job.keyword_replacement_spec or "")
-        transcript = groq_client.transcribe_audio(
+        groq_result = groq_client.transcribe_audio(
             api_key=key,
             wav_bytes=raw,
             model=model,
             prompt=whisper_ctx,
         )
+        transcript = groq_result.text.strip()
+        silence_detected = groq_result.silence_detected
+        asr_metadata = dict(groq_result.metadata)
+        asr_metadata["model"] = model
     elif provider == TranscriptionProvider.OPENROUTER.value:
         key = get_openrouter_api_key()
         if not key:
@@ -251,7 +263,7 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
         if not model:
             raise HTTPException(status_code=400, detail="OpenRouter transcription model required.")
         or_instr = (job.openrouter_transcription_instruction or "").strip() or (
-            "Transcribe this audio accurately. Reply with only the transcript."
+            OPENROUTER_TRANSCRIPTION_INSTRUCTION
         )
         transcript = openrouter_client.transcribe_with_audio_model(
             api_key=key,
@@ -259,12 +271,23 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
             wav_bytes=raw,
             instruction=or_instr,
         )
+        silence_detected = transcript.strip() == OPENROUTER_TRANSCRIPTION_NONE_OUTPUT
+        asr_metadata = {
+            "provider": "openrouter",
+            "model": model,
+            "response_format": "chat_completions",
+            "is_silence": silence_detected,
+        }
     else:
         raise HTTPException(status_code=400, detail="Unknown transcription provider.")
     transcribe_ms = (time.perf_counter() - t_asr_start) * 1000.0
 
-    pairs = parse_replacement_spec(job.keyword_replacement_spec or "")
-    corrected = apply_replacements(transcript, pairs)
+    if silence_detected:
+        transcript = OPENROUTER_TRANSCRIPTION_NONE_OUTPUT
+        corrected = transcript
+    else:
+        pairs = parse_replacement_spec(job.keyword_replacement_spec or "")
+        corrected = apply_replacements(transcript, pairs)
     t_transcript_ready = time.perf_counter()
 
     processed: str | None = None
@@ -273,7 +296,7 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
     postprocess_prep_ms: float | None = None
     postprocess_api_ms: float | None = None
     postprocess_chunks: int | None = None
-    if job.postprocess_enabled:
+    if job.postprocess_enabled and not silence_detected:
         sys_prompt = (job.postprocess_prompt or "").strip() or "You are a helpful assistant."
         post_model = (job.postprocess_model or "").strip()
         if not post_model:
@@ -305,7 +328,9 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
         processed=processed,
         id=entry_id,
         created_at=created_at,
-        transcript_chars=len(corrected),
+        silence_detected=silence_detected,
+        asr_metadata=asr_metadata,
+        transcript_chars=0 if silence_detected else len(corrected),
         transcribe_ms=transcribe_ms,
         pre_postprocess_ms=pre_postprocess_ms,
         postprocess_ms=postprocess_ms,
@@ -323,6 +348,8 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
 
 def text_to_paste(prefs: AppPreferences, result: TranscribeResponse) -> str:
     """Choose clipboard text: post-processed when enabled, otherwise transcript."""
+    if result.silence_detected or result.transcript.strip() == OPENROUTER_TRANSCRIPTION_NONE_OUTPUT:
+        return ""
     if prefs.postprocess_enabled and result.processed:
         return result.processed
     return result.transcript
