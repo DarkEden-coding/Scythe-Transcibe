@@ -44,10 +44,31 @@ _KEY_TO_TOKEN: dict[Key | KeyCode, str] = {
 
 _PART_ALIASES = {
     "control": "ctrl",
+    "option": "alt",
+    "cmd": "meta",
+    "command": "meta",
     "win": "meta",
     "super": "meta",
     "os": "meta",
 }
+
+_SPACE_VKS = {32}
+_SPACE_KEY_VK = getattr(Key.space.value, "vk", None)
+if _SPACE_KEY_VK is not None:
+    _SPACE_VKS.add(_SPACE_KEY_VK)
+
+# VK code to f-key token, built from the platform Key enum at import time.
+# On macOS, pynput may return a KeyCode (with only a vk, no char) for function
+# keys instead of the Key.fN enum member when the OS intercepts the key for a
+# media/special action.  Without this table the KeyCode branch returns None and
+# the hotkey is silently ignored.
+_VK_TO_FKEY_TOKEN: dict[int, str] = {}
+for _fk in Key:
+    _nm = _fk.name  # "f1", "f2", ..., "f20"
+    if _nm.startswith("f") and _nm[1:].isdigit():
+        _fk_vk = getattr(_fk.value, "vk", None)
+        if _fk_vk is not None:
+            _VK_TO_FKEY_TOKEN[_fk_vk] = _nm
 
 
 def _normalize_combo_part(part: str) -> str:
@@ -71,11 +92,22 @@ def _key_event_token(key: Key | KeyCode | None) -> str | None:
     if key in _KEY_TO_TOKEN:
         return _KEY_TO_TOKEN[key]
     if isinstance(key, KeyCode):
+        vk = getattr(key, "vk", None)
+        if vk in _SPACE_VKS:
+            return "space"
+        if key.char in {" ", "\xa0"}:
+            return "space"
+        # On macOS, pynput may resolve a function key to a KeyCode whose vk
+        # matches a Key.fN entry instead of returning the Key enum member
+        # directly.  Check the vk table before falling back to key.char so
+        # that private-use Unicode chars produced by macOS for F-keys do not
+        # shadow the correct "f1"/"f5"/... token.
+        if vk is not None:
+            fkey = _VK_TO_FKEY_TOKEN.get(vk)
+            if fkey:
+                return fkey
         if key.char:
             return key.char.lower()
-        vk = getattr(key, "vk", None)
-        if vk == 32:
-            return "space"
     if isinstance(key, Key):
         name = key.name
         if isinstance(name, str):

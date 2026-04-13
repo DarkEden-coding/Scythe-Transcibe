@@ -178,9 +178,15 @@ const MODIFIER_KEYS = new Set([
 
 /** Normalizes `e.key` for the non-modifier slot (Win/OS/Super → meta for consistency). */
 function normalizeKeySlot(e: KeyboardEvent): string {
-  const raw = e.key;
-  if (raw === " ") return "space";
-  const lower = raw.length === 1 ? raw.toLowerCase() : raw.toLowerCase();
+  // Use the physical key code for space and function keys so that macOS modifier
+  // behavior doesn't corrupt the token:
+  // - Option+Space produces e.key = "\u00a0" instead of " ".
+  // - Option+Fn may produce a non-standard e.key for some function keys.
+  // e.code is "Space" / "F1"..."F20" regardless of held modifiers.
+  if (e.code === "Space" || e.key === " " || e.key === "\u00a0") return "space";
+  const fnMatch = /^F(\d{1,2})$/.exec(e.code ?? "");
+  if (fnMatch) return "f" + fnMatch[1];
+  const lower = e.key.toLowerCase();
   if (lower === "os" || lower === "super") return "meta";
   return lower;
 }
