@@ -311,6 +311,7 @@ export function App() {
   const [orTranscribeManualOpen, setOrTranscribeManualOpen] = useState(false);
   const [postCustomModelOpen, setPostCustomModelOpen] = useState(false);
   const prefsRef = useRef(prefs);
+  const frontendSessionIdRef = useRef(crypto.randomUUID());
   prefsRef.current = prefs;
 
   const onShellPointerMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
@@ -331,6 +332,37 @@ export function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    const sessionId = frontendSessionIdRef.current;
+    const heartbeatPath = `/api/frontend-session/${encodeURIComponent(sessionId)}/heartbeat`;
+    const closePath = `/api/frontend-session/${encodeURIComponent(sessionId)}/close`;
+    const heartbeat = () => {
+      void fetch(heartbeatPath, { method: "POST", keepalive: true }).catch(() => {});
+    };
+    const closeSession = () => {
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(closePath, new Blob([], { type: "application/octet-stream" }));
+        return;
+      }
+      void fetch(closePath, { method: "POST", keepalive: true }).catch(() => {});
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        heartbeat();
+      }
+    };
+    heartbeat();
+    const id = window.setInterval(heartbeat, 20_000);
+    window.addEventListener("pagehide", closeSession);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("pagehide", closeSession);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      closeSession();
+    };
+  }, []);
 
   useEffect(() => {
     if (!hydrated) return;

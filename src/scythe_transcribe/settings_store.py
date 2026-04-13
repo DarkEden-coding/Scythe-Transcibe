@@ -8,7 +8,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 from platformdirs import user_config_dir
 
 from scythe_transcribe.models import AppPreferences
@@ -18,8 +17,22 @@ _APP_NAME = "Scythe-Transcribe"
 _MAX_TRANSCRIPTION_HISTORY = 5000
 
 _history_lock = threading.Lock()
+_dotenv_lock = threading.Lock()
+_dotenv_loaded = False
 
-load_dotenv()
+
+def _ensure_dotenv_loaded() -> None:
+    """Load optional .env values only if an environment fallback is needed."""
+    global _dotenv_loaded
+    if _dotenv_loaded:
+        return
+    with _dotenv_lock:
+        if _dotenv_loaded:
+            return
+        from dotenv import load_dotenv
+
+        load_dotenv()
+        _dotenv_loaded = True
 
 
 def _config_dir() -> Path:
@@ -94,6 +107,7 @@ def get_groq_api_key() -> str:
     key = (data.get("groq") or "").strip()
     if key:
         return key
+    _ensure_dotenv_loaded()
     return os.environ.get("GROQ_API_KEY", "").strip()
 
 
@@ -103,6 +117,7 @@ def get_openrouter_api_key() -> str:
     key = (data.get("openrouter") or "").strip()
     if key:
         return key
+    _ensure_dotenv_loaded()
     return os.environ.get("OPENROUTER_API_KEY", "").strip()
 
 

@@ -19,7 +19,13 @@ uv sync
 uv run scythe-transcribe
 ```
 
-A **system tray** icon (Windows) or **menu bar** icon (macOS) appears. Use **Open Scythe** to open the web UI (served at `http://127.0.0.1:8765/` when the server is enabled), **Disable server** / **Enable server** to stop or restart the API, or **Shutdown** to quit.
+A **system tray** icon (Windows) or **menu bar** icon (macOS) appears. Use **Open settings** to open the web UI (served at `http://127.0.0.1:8765/` when the server is enabled), **Disable server** / **Enable server** to stop or restart the API, or **Shutdown** to quit.
+
+In tray/menu-bar mode the settings server can sleep to reduce idle memory. The
+app keeps a tiny local wake listener on `127.0.0.1:8765`; opening the UI, or
+requesting that URL after the backend has slept, starts the full FastAPI server
+again. If no browser frontend is open for 5 minutes, the full settings server is
+unloaded until the next connection.
 
 Set `SCYTHE_TRAY=0` to run only the HTTP server in the foreground (no tray):
 

@@ -12,10 +12,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from scythe_transcribe import groq_client, openrouter_client
 from scythe_transcribe.config import API_CORS_ORIGINS
+from scythe_transcribe.frontend_activity import FrontendActivity
 from scythe_transcribe.models import AppPreferences, ChatProvider
-from scythe_transcribe.startup import is_startup_enabled, set_startup_enabled
 from scythe_transcribe.settings_store import (
     get_groq_api_key,
     get_openrouter_api_key,
@@ -28,12 +27,7 @@ from scythe_transcribe.settings_store import (
     set_groq_api_key,
     set_openrouter_api_key,
 )
-from scythe_transcribe.transcribe_pipeline import (
-    TranscribeJob,
-    TranscribeResponse,
-    postprocess_transcript_text,
-    transcribe_wav_bytes,
-)
+from scythe_transcribe.startup import is_startup_enabled, set_startup_enabled
 
 
 class ApiKeysPublic(BaseModel):
@@ -64,7 +58,7 @@ def _static_root() -> Path | None:
     return None
 
 
-def create_app() -> FastAPI:
+def create_app(frontend_activity: FrontendActivity | None = None) -> FastAPI:
     """Build FastAPI app with API routes and optional static SPA."""
     app = FastAPI(
         title="Scythe-Transcribe API",
@@ -93,6 +87,27 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, str]:
         """Liveness probe for the local server."""
+        return {"status": "ok"}
+
+    @app.post("/api/frontend-session/{session_id}/heartbeat")
+    def frontend_session_heartbeat(session_id: str) -> dict[str, str]:
+        """Record that a browser frontend is open."""
+        if frontend_activity is not None:
+            frontend_activity.mark_seen(session_id)
+        return {"status": "ok"}
+
+    @app.delete("/api/frontend-session/{session_id}")
+    def frontend_session_close(session_id: str) -> dict[str, str]:
+        """Record that a browser frontend has closed."""
+        if frontend_activity is not None:
+            frontend_activity.close(session_id)
+        return {"status": "ok"}
+
+    @app.post("/api/frontend-session/{session_id}/close")
+    def frontend_session_close_beacon(session_id: str) -> dict[str, str]:
+        """Record frontend close from ``navigator.sendBeacon``."""
+        if frontend_activity is not None:
+            frontend_activity.close(session_id)
         return {"status": "ok"}
 
     @app.get("/api/preferences", response_model=dict[str, Any])
@@ -129,6 +144,8 @@ def create_app() -> FastAPI:
     @app.get("/api/groq/chat-models")
     def list_groq_chat_models() -> dict[str, list[str]]:
         """List Groq chat models (for post-process dropdown)."""
+        from scythe_transcribe import groq_client
+
         key = get_groq_api_key()
         if not key:
             return {"models": []}
@@ -138,6 +155,8 @@ def create_app() -> FastAPI:
     @app.get("/api/openrouter/models")
     def list_openrouter_models_cached() -> dict[str, list[dict[str, Any]]]:
         """Return OpenRouter model metadata from cache, fetching if missing."""
+        from scythe_transcribe import openrouter_client
+
         path = openrouter_models_cache_path()
         raw = load_json_cache(path)
         stale = (
@@ -167,6 +186,8 @@ def create_app() -> FastAPI:
     @app.post("/api/openrouter/models/refresh")
     def refresh_openrouter_models() -> dict[str, Any]:
         """Fetch OpenRouter models and refresh the cache (no API key required)."""
+        from scythe_transcribe import openrouter_client
+
         try:
             key = get_openrouter_api_key() or None
             raw_list = openrouter_client.fetch_models_raw(key)
@@ -231,12 +252,14 @@ def create_app() -> FastAPI:
         """Return persisted transcription history (newest first)."""
         return {"entries": load_transcription_history()}
 
-    @app.post("/api/transcribe", response_model=TranscribeResponse)
+    @app.post("/api/transcribe")
     async def transcribe(
         meta: Annotated[str, Form(description="JSON TranscribeJob")],
         audio: Annotated[UploadFile, File()],
-    ) -> TranscribeResponse:
+    ) -> Any:
         """Transcribe uploaded WAV audio; optional LLM post-process in one request."""
+        from scythe_transcribe.transcribe_pipeline import TranscribeJob, transcribe_wav_bytes
+
         try:
             job = TranscribeJob.model_validate_json(meta)
         except Exception as exc:
@@ -248,6 +271,8 @@ def create_app() -> FastAPI:
     @app.post("/api/postprocess", response_model=dict[str, str])
     def postprocess_only(body: dict[str, Any]) -> dict[str, str]:
         """Run LLM post-process on existing transcript text."""
+        from scythe_transcribe.transcribe_pipeline import postprocess_transcript_text
+
         transcript = str(body.get("transcript", ""))
         sys_prompt = str(body.get("postprocess_prompt", "") or "You are a helpful assistant.")
         post_model = str(body.get("postprocess_model", "")).strip()

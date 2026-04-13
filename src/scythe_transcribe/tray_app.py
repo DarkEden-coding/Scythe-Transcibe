@@ -9,6 +9,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 from scythe_transcribe.config import PUBLIC_BASE_URL
+from scythe_transcribe.hotkey_service import start_hotkey_listener
 from scythe_transcribe.http_server import LocalHttpServer
 
 
@@ -29,7 +30,8 @@ def _make_tray_image(size: int = 64) -> Image.Image:
 def run_tray() -> None:
     """Run the tray icon until the user chooses Shutdown."""
     server = LocalHttpServer()
-    server.start()
+    start_hotkey_listener()
+    server.start_wake_listener()
 
     state: dict[str, Any] = {"enabled": True}
     icon_holder: dict[str, pystray.Icon | None] = {"icon": None}
@@ -41,14 +43,15 @@ def run_tray() -> None:
         def open_web(_: pystray.Icon, __: Any) -> None:
             if not enabled:
                 return
+            server.start()
             webbrowser.open(PUBLIC_BASE_URL)
 
         def toggle_server(_: pystray.Icon, __: Any) -> None:
             if state["enabled"]:
-                server.stop()
+                server.disable()
                 state["enabled"] = False
             else:
-                server.start()
+                server.enable_sleeping()
                 state["enabled"] = True
             ic = icon_holder["icon"]
             if ic is not None:
@@ -56,7 +59,7 @@ def run_tray() -> None:
                 ic.update_menu()
 
         def shutdown(_: pystray.Icon, __: Any) -> None:
-            server.stop()
+            server.disable()
             ic = icon_holder["icon"]
             if ic is not None:
                 ic.stop()

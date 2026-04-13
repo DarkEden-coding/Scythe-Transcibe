@@ -8,39 +8,18 @@ import threading
 import time
 import wave
 from collections import defaultdict
-
-import numpy as np
-import pyperclip
-import sounddevice as sd
-from pynput.keyboard import Controller, Key, KeyCode, Listener
+from typing import Any
 
 from scythe_transcribe.settings_store import load_preferences, patch_transcription_history_entry
-from scythe_transcribe.transcribe_pipeline import (
-    text_to_paste,
-    transcribe_job_from_preferences,
-    transcribe_wav_bytes,
-)
 
 _started = threading.Lock()
 _listener_started = False
+_keyboard_init_lock = threading.Lock()
+_keyboard_api: dict[str, Any] = {}
 
 _MODIFIER_TOKENS = frozenset({"ctrl", "alt", "shift", "meta"})
 
-_KEY_TO_TOKEN: dict[Key | KeyCode, str] = {
-    Key.ctrl: "ctrl",
-    Key.ctrl_l: "ctrl",
-    Key.ctrl_r: "ctrl",
-    Key.alt: "alt",
-    Key.alt_l: "alt",
-    Key.alt_r: "alt",
-    Key.shift: "shift",
-    Key.shift_l: "shift",
-    Key.shift_r: "shift",
-    Key.cmd: "meta",
-    Key.cmd_l: "meta",
-    Key.cmd_r: "meta",
-    Key.space: "space",
-}
+_KEY_TO_TOKEN: dict[object, str] = {}
 
 _PART_ALIASES = {
     "control": "ctrl",
@@ -53,9 +32,6 @@ _PART_ALIASES = {
 }
 
 _SPACE_VKS = {32}
-_SPACE_KEY_VK = getattr(Key.space.value, "vk", None)
-if _SPACE_KEY_VK is not None:
-    _SPACE_VKS.add(_SPACE_KEY_VK)
 
 # VK code to f-key token, built from the platform Key enum at import time.
 # On macOS, pynput may return a KeyCode (with only a vk, no char) for function
@@ -63,12 +39,52 @@ if _SPACE_KEY_VK is not None:
 # media/special action.  Without this table the KeyCode branch returns None and
 # the hotkey is silently ignored.
 _VK_TO_FKEY_TOKEN: dict[int, str] = {}
-for _fk in Key:
-    _nm = _fk.name  # "f1", "f2", ..., "f20"
-    if _nm.startswith("f") and _nm[1:].isdigit():
-        _fk_vk = getattr(_fk.value, "vk", None)
-        if _fk_vk is not None:
-            _VK_TO_FKEY_TOKEN[_fk_vk] = _nm
+
+
+def _ensure_keyboard_api() -> dict[str, Any]:
+    """Import pynput and build keyboard lookup tables on first actual use."""
+    if _keyboard_api:
+        return _keyboard_api
+    with _keyboard_init_lock:
+        if _keyboard_api:
+            return _keyboard_api
+        from pynput.keyboard import Controller, Key, KeyCode, Listener
+
+        _KEY_TO_TOKEN.update(
+            {
+                Key.ctrl: "ctrl",
+                Key.ctrl_l: "ctrl",
+                Key.ctrl_r: "ctrl",
+                Key.alt: "alt",
+                Key.alt_l: "alt",
+                Key.alt_r: "alt",
+                Key.shift: "shift",
+                Key.shift_l: "shift",
+                Key.shift_r: "shift",
+                Key.cmd: "meta",
+                Key.cmd_l: "meta",
+                Key.cmd_r: "meta",
+                Key.space: "space",
+            }
+        )
+        space_key_vk = getattr(Key.space.value, "vk", None)
+        if space_key_vk is not None:
+            _SPACE_VKS.add(space_key_vk)
+        for fk in Key:
+            name = fk.name  # "f1", "f2", ..., "f20"
+            if name.startswith("f") and name[1:].isdigit():
+                fk_vk = getattr(fk.value, "vk", None)
+                if fk_vk is not None:
+                    _VK_TO_FKEY_TOKEN[fk_vk] = name
+        _keyboard_api.update(
+            {
+                "Controller": Controller,
+                "Key": Key,
+                "KeyCode": KeyCode,
+                "Listener": Listener,
+            }
+        )
+        return _keyboard_api
 
 
 def _normalize_combo_part(part: str) -> str:
@@ -85,8 +101,11 @@ def _parse_hotkey_combo(raw: str) -> list[str]:
     return [_normalize_combo_part(p) for p in t.split("+") if p.strip()]
 
 
-def _key_event_token(key: Key | KeyCode | None) -> str | None:
+def _key_event_token(key: object | None) -> str | None:
     """Map pynput key to the same token space as the UI (ctrl, space, a, …)."""
+    api = _ensure_keyboard_api()
+    Key = api["Key"]
+    KeyCode = api["KeyCode"]
     if key is None:
         return None
     if key in _KEY_TO_TOKEN:
@@ -118,8 +137,10 @@ def _key_event_token(key: Key | KeyCode | None) -> str | None:
     return None
 
 
-def _float32_mono_to_wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
+def _float32_mono_to_wav_bytes(samples: Any, sample_rate: int) -> bytes:
     """Encode mono float32 [-1,1] PCM as WAV bytes (16-bit)."""
+    import numpy as np
+
     if samples.size == 0:
         return b""
     clipped = np.clip(samples.astype(np.float64, copy=False), -1.0, 1.0)
@@ -137,6 +158,11 @@ def _paste_at_cursor(text: str, suppress_until: list[float]) -> None:
     """Put text on the clipboard and send the platform paste chord."""
     if not text.strip():
         return
+    import pyperclip
+
+    api = _ensure_keyboard_api()
+    Controller = api["Controller"]
+    Key = api["Key"]
     pyperclip.copy(text)
     time.sleep(0.04)
     suppress_until[0] = time.monotonic() + 0.35
@@ -150,11 +176,13 @@ def _paste_at_cursor(text: str, suppress_until: list[float]) -> None:
 
 def _run_hotkey_loop() -> None:
     """Listen for hold-to-talk; on release run transcribe + paste in a worker thread."""
+    Listener = _ensure_keyboard_api()["Listener"]
+
     combo_parts: list[str] = []
     counts: dict[str, int] = defaultdict(int)
     prev_active = False
-    stream_holder: list[sd.InputStream | None] = [None]
-    chunks_holder: list[list[np.ndarray]] = [[]]
+    stream_holder: list[Any | None] = [None]
+    chunks_holder: list[list[Any]] = [[]]
     transcribing = threading.Event()
     suppress_until: list[float] = [0.0]
 
@@ -166,7 +194,9 @@ def _run_hotkey_loop() -> None:
             return False
         return all(counts.get(p, 0) >= 1 for p in combo_parts)
 
-    def stop_stream() -> np.ndarray:
+    def stop_stream() -> Any:
+        import numpy as np
+
         st = stream_holder[0]
         stream_holder[0] = None
         chunks = chunks_holder[0]
@@ -179,9 +209,11 @@ def _run_hotkey_loop() -> None:
         return np.concatenate(chunks, axis=0).reshape(-1)
 
     def start_stream() -> None:
+        import sounddevice as sd
+
         chunks_holder[0] = []
 
-        def callback(indata: np.ndarray, _frames: int, _t: object, status: object) -> None:
+        def callback(indata: Any, _frames: int, _t: object, status: object) -> None:
             if status:
                 pass
             chunks_holder[0].append(indata.copy())
@@ -199,6 +231,12 @@ def _run_hotkey_loop() -> None:
             return
         transcribing.set()
         try:
+            from scythe_transcribe.transcribe_pipeline import (
+                text_to_paste,
+                transcribe_job_from_preferences,
+                transcribe_wav_bytes,
+            )
+
             prefs = load_preferences()
             job = transcribe_job_from_preferences(prefs)
             result = transcribe_wav_bytes(job, wav_bytes)
@@ -221,7 +259,7 @@ def _run_hotkey_loop() -> None:
         finally:
             transcribing.clear()
 
-    def on_press(key: Key | KeyCode | None) -> None:
+    def on_press(key: object | None) -> None:
         nonlocal prev_active
         if is_suppressed():
             return
@@ -245,7 +283,7 @@ def _run_hotkey_loop() -> None:
                 return
         prev_active = active
 
-    def on_release(key: Key | KeyCode | None) -> None:
+    def on_release(key: object | None) -> None:
         nonlocal prev_active
         if is_suppressed():
             return

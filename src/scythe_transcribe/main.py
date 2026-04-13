@@ -5,11 +5,9 @@ from __future__ import annotations
 import os
 import sys
 
-from scythe_transcribe.http_server import run_foreground
-
 # Module-level file handle kept open for the lifetime of the process so the
 # OS lock is held until we exit (even on crash).
-_lock_fh: "object | None" = None
+_lock_fh: object | None = None
 
 
 def _acquire_single_instance_lock() -> bool:
@@ -90,4 +88,6 @@ def run_app() -> None:
 
 def run_server_foreground() -> None:
     """Run Uvicorn in the current thread (development / CI)."""
+    from scythe_transcribe.http_server import run_foreground
+
     run_foreground()

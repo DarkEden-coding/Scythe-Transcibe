@@ -7,10 +7,9 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from fastapi import HTTPException
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException
 
-from scythe_transcribe import groq_client, openrouter_client
 from scythe_transcribe.config import (
     MAX_UPLOAD_BYTES,
     POSTPROCESS_CHUNK_MAX_USER_CHARS,
@@ -180,6 +179,8 @@ def postprocess_transcript_text(
     def run_segment(idx: int, user_chunk: str) -> tuple[int, str]:
         sys_seg = base_sys + _segment_instruction(idx, len(chunks))
         if pprov == ChatProvider.GROQ.value:
+            from scythe_transcribe import groq_client
+
             gkey = get_groq_api_key()
             if not gkey:
                 raise HTTPException(status_code=400, detail="Groq API key not configured.")
@@ -191,6 +192,8 @@ def postprocess_transcript_text(
                 reasoning_effort=groq_eff,
             )
         else:
+            from scythe_transcribe import openrouter_client
+
             okey = get_openrouter_api_key()
             if not okey:
                 raise HTTPException(status_code=400, detail="OpenRouter API key not configured.")
@@ -240,6 +243,8 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
 
     t_asr_start = time.perf_counter()
     if provider == TranscriptionProvider.GROQ.value:
+        from scythe_transcribe import groq_client
+
         key = get_groq_api_key()
         if not key:
             raise HTTPException(status_code=400, detail="Groq API key not configured.")
@@ -256,6 +261,8 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
         asr_metadata = dict(groq_result.metadata)
         asr_metadata["model"] = model
     elif provider == TranscriptionProvider.OPENROUTER.value:
+        from scythe_transcribe import openrouter_client
+
         key = get_openrouter_api_key()
         if not key:
             raise HTTPException(status_code=400, detail="OpenRouter API key not configured.")
