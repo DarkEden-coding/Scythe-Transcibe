@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
+
+from scythe_transcribe.settings_store import configure_diagnostics_file_logging
 
 # Module-level file handle kept open for the lifetime of the process so the
 # OS lock is held until we exit (even on crash).
@@ -54,9 +57,22 @@ def run_app() -> None:
     Set ``SCYTHE_TRAY`` to ``0``, ``false``, or ``no`` to run the server in the
     foreground without the tray (same as :func:`run_server_foreground`).
     """
+    log_path = configure_diagnostics_file_logging()
+    log = logging.getLogger("scythe_transcribe.main")
+    log.info(
+        "process start executable=%s argv=%s frozen=%s meipass=%s",
+        sys.executable,
+        sys.argv,
+        getattr(sys, "frozen", False),
+        getattr(sys, "_MEIPASS", None),
+    )
     if not _acquire_single_instance_lock():
         # Another instance is already running (e.g. launched manually while the
         # LaunchAgent / startup entry also fired).  Exit silently.
+        log.warning(
+            "exiting: could not acquire single-instance lock (log file: %s)",
+            log_path,
+        )
         sys.exit(0)
 
     try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from pathlib import Path
@@ -19,6 +20,7 @@ _MAX_TRANSCRIPTION_HISTORY = 5000
 _history_lock = threading.Lock()
 _dotenv_lock = threading.Lock()
 _dotenv_loaded = False
+_diagnostics_logging_configured = False
 
 
 def _ensure_dotenv_loaded() -> None:
@@ -40,6 +42,38 @@ def _config_dir() -> Path:
     base = Path(user_config_dir(_APP_NAME, appauthor=False))
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+def diagnostics_log_path() -> Path:
+    """Return the path to the diagnostics log file."""
+    return _config_dir() / "scythe-transcribe.log"
+
+
+def configure_diagnostics_file_logging() -> Path:
+    """Attach a file handler so windowed (no-console) builds can be diagnosed.
+
+    Idempotent: safe to call multiple times.
+
+    Returns:
+        Absolute path to the log file.
+    """
+    global _diagnostics_logging_configured
+    path = diagnostics_log_path()
+    if _diagnostics_logging_configured:
+        return path
+    handler = logging.FileHandler(path, encoding="utf-8")
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"),
+    )
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    root.addHandler(handler)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    _diagnostics_logging_configured = True
+    return path
 
 
 def _prefs_path() -> Path:
