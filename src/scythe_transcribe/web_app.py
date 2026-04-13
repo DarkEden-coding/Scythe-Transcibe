@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from scythe_transcribe import groq_client, openrouter_client
 from scythe_transcribe.config import API_CORS_ORIGINS
 from scythe_transcribe.models import AppPreferences, ChatProvider
+from scythe_transcribe.startup import is_startup_enabled, set_startup_enabled
 from scythe_transcribe.settings_store import (
     get_groq_api_key,
     get_openrouter_api_key,
@@ -175,6 +176,18 @@ def create_app() -> FastAPI:
             return {"count": len(infos), "models": [asdict(x) for x in infos]}
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/startup")
+    def get_startup() -> dict[str, bool]:
+        """Return whether the app is registered to run at login."""
+        return {"enabled": is_startup_enabled()}
+
+    @app.put("/api/startup")
+    def put_startup(body: dict[str, bool]) -> dict[str, bool]:
+        """Register or unregister the app to run at login."""
+        enabled = bool(body.get("enabled", False))
+        set_startup_enabled(enabled)
+        return {"enabled": is_startup_enabled()}
 
     @app.get("/api/transcription-history")
     def transcription_history() -> dict[str, Any]:

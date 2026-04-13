@@ -298,6 +298,8 @@ export function App() {
   const [bgPos, setBgPos] = useState({ x: 50, y: 40 });
   const [capturingToggleRecording, setCapturingToggleRecording] = useState(false);
   const [keywordRows, setKeywordRows] = useState<KeywordRow[]>([]);
+  const [startupEnabled, setStartupEnabled] = useState(false);
+  const [startupLoading, setStartupLoading] = useState(false);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
 
@@ -367,6 +369,12 @@ export function App() {
           const gm = await apiJson<{ models: string[] }>("/api/groq/chat-models");
           setGroqChatModels(gm.models ?? []);
         }
+        try {
+          const su = await apiJson<{ enabled: boolean }>("/api/startup");
+          setStartupEnabled(su.enabled);
+        } catch {
+          /* startup endpoint may not be supported on this platform */
+        }
       } catch (e) {
         setStatus(`Load failed: ${e instanceof Error ? e.message : String(e)}`);
         setStatusColor("#c62828");
@@ -421,6 +429,23 @@ export function App() {
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
       setStatusColor("#c62828");
+    }
+  };
+
+  const toggleStartup = async (enabled: boolean) => {
+    setStartupLoading(true);
+    try {
+      const res = await apiJson<{ enabled: boolean }>("/api/startup", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      setStartupEnabled(res.enabled);
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : String(e));
+      setStatusColor("#c62828");
+    } finally {
+      setStartupLoading(false);
     }
   };
 
@@ -625,6 +650,22 @@ export function App() {
               >
                 Reset to default
               </button>
+            </div>
+
+            <h2 className="section-title" style={{ marginTop: "1.5rem" }}>Startup</h2>
+            <div className="field-row" style={{ alignItems: "center" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={startupEnabled}
+                  disabled={startupLoading}
+                  onChange={(e) => void toggleStartup(e.target.checked)}
+                />
+                Launch at login
+              </label>
+              <span className="muted" style={{ marginLeft: "0.5rem" }}>
+                Automatically start Scythe-Transcribe when you log in.
+              </span>
             </div>
           </div>
           )}
