@@ -15,13 +15,17 @@ Windows → dist/scythe-transcribe/      (run scythe-transcribe.exe inside)
 
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 import subprocess
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-FRONTEND     = ROOT / "frontend"
+FRONTEND = ROOT / "frontend"
 FRONTEND_OUT = FRONTEND / "dist"
 WEB_DIST_PKG = ROOT / "src" / "scythe_transcribe" / "web_dist"
 PACKAGE_DIR = ROOT / "src" / "scythe_transcribe"
@@ -31,6 +35,9 @@ ICON_ASSETS = [
     PACKAGE_DIR / "icon-red.webp",
     PACKAGE_DIR / "icon-yellow.webp",
 ]
+
+DIST_WINDOWS = ROOT / "dist" / "scythe-transcribe"
+WINDOWS_APP_EXE = "scythe-transcribe.exe"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -62,6 +69,41 @@ def _sync_frontend_icons() -> None:
         shutil.copy2(src, FRONTEND_PUBLIC / src.name)
 
 
+def _rmtree_clear_readonly(func: Callable[[str], None], path: str, _: object) -> None:
+    """``shutil.rmtree`` handler: clear read-only bit, then retry delete (Windows)."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _prepare_windows_dist_for_pyinstaller() -> None:
+    """Free ``dist/scythe-transcribe`` so PyInstaller can replace a prior build.
+
+    On Windows, ``scythe-transcribe.exe`` locks its file while running; PyInstaller's clean step
+    then fails with ``PermissionError``. Killing the process and retrying removal avoids that.
+    """
+    subprocess.run(
+        ["taskkill", "/F", "/IM", WINDOWS_APP_EXE],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    time.sleep(0.35)
+    if not DIST_WINDOWS.exists():
+        return
+    delay = 0.4
+    last_err: OSError | None = None
+    for attempt in range(5):
+        try:
+            shutil.rmtree(DIST_WINDOWS, onerror=_rmtree_clear_readonly)
+            return
+        except PermissionError as err:
+            last_err = err
+            time.sleep(delay * (attempt + 1))
+    assert last_err is not None
+    raise last_err
+
+
 # ── build steps ───────────────────────────────────────────────────────────────
 
 
@@ -74,8 +116,7 @@ def build_frontend() -> None:
         _run(npm, "install", cwd=FRONTEND)
     _run(npm, "run", "build", cwd=FRONTEND)
 
-    print(f"\n── 2/3  Copy {FRONTEND_OUT.relative_to(ROOT)} "
-          f"→ {WEB_DIST_PKG.relative_to(ROOT)} ───")
+    print(f"\n── 2/3  Copy {FRONTEND_OUT.relative_to(ROOT)} → {WEB_DIST_PKG.relative_to(ROOT)} ───")
     if WEB_DIST_PKG.exists():
         shutil.rmtree(WEB_DIST_PKG)
     shutil.copytree(FRONTEND_OUT, WEB_DIST_PKG)
@@ -84,8 +125,10 @@ def build_frontend() -> None:
 
 def run_pyinstaller() -> None:
     print("\n── 3/3  PyInstaller ─────────────────────────────────────────")
-    _run(sys.executable, "-m", "PyInstaller", "--clean", "-y", "scythe_transcribe.spec",
-         cwd=ROOT)
+    if sys.platform == "win32":
+        print("  Preparing dist output (close running scythe-transcribe if needed)...")
+        _prepare_windows_dist_for_pyinstaller()
+    _run(sys.executable, "-m", "PyInstaller", "--clean", "-y", "scythe_transcribe.spec", cwd=ROOT)
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
