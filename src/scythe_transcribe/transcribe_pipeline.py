@@ -283,12 +283,6 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
         or_eff = (job.postprocess_openrouter_reasoning_effort or "").strip() or None
         pre_pp_ms = (time.perf_counter() - t_transcript_ready) * 1000.0
         pre_postprocess_ms = pre_pp_ms
-        _logger.info(
-            "postprocess_pre_api id=%s pre_postprocess_ms=%.1f "
-            "(transcript_ready to postprocess start)",
-            entry_id,
-            pre_pp_ms,
-        )
         t_pp_start = time.perf_counter()
         processed, prep_ms, api_ms, n_chunks = postprocess_transcript_text(
             transcript=corrected,
@@ -297,7 +291,6 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
             postprocess_provider=pprov,
             groq_reasoning_effort=groq_eff,
             openrouter_reasoning_effort=or_eff,
-            trace_id=entry_id,
         )
         postprocess_ms = (time.perf_counter() - t_pp_start) * 1000.0
         postprocess_prep_ms = prep_ms
@@ -325,23 +318,6 @@ def transcribe_wav_bytes(job: TranscribeJob, raw: bytes) -> TranscribeResponse:
         append_transcription_history(response.model_dump())
     except Exception:
         _logger.exception("append_transcription_history failed")
-    pp_log = f"{postprocess_ms:.1f}" if postprocess_ms is not None else "none"
-    prep_log = (
-        f"{postprocess_prep_ms:.1f}" if postprocess_prep_ms is not None else "none"
-    )
-    api_log = f"{postprocess_api_ms:.1f}" if postprocess_api_ms is not None else "none"
-    ch_log = str(postprocess_chunks) if postprocess_chunks is not None else "none"
-    _logger.info(
-        "transcription pipeline completed id=%s transcribe_ms=%.1f postprocess_ms=%s "
-        "postprocess_prep_ms=%s postprocess_api_ms=%s postprocess_chunks=%s total_ms=%.1f",
-        entry_id,
-        transcribe_ms,
-        pp_log,
-        prep_log,
-        api_log,
-        ch_log,
-        total_ms,
-    )
     return response
 
 

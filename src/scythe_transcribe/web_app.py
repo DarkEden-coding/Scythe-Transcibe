@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-import time
-import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
@@ -36,8 +33,6 @@ from scythe_transcribe.transcribe_pipeline import (
     postprocess_transcript_text,
     transcribe_wav_bytes,
 )
-
-_logger = logging.getLogger(__name__)
 
 
 class ApiKeysPublic(BaseModel):
@@ -192,34 +187,13 @@ def create_app() -> FastAPI:
         audio: Annotated[UploadFile, File()],
     ) -> TranscribeResponse:
         """Transcribe uploaded WAV audio; optional LLM post-process in one request."""
-        request_id = str(uuid.uuid4())
-        wall_start = time.perf_counter()
-        _logger.info("transcribe request started request_id=%s", request_id)
         try:
             job = TranscribeJob.model_validate_json(meta)
         except Exception as exc:
-            _logger.info(
-                "transcribe request failed request_id=%s phase=meta error=%s",
-                request_id,
-                exc,
-            )
             raise HTTPException(status_code=422, detail=f"Invalid meta JSON: {exc}") from exc
 
         raw = await audio.read()
-        result = transcribe_wav_bytes(job, raw)
-        wall_ms = (time.perf_counter() - wall_start) * 1000.0
-        pp = f"{result.postprocess_ms:.1f}" if result.postprocess_ms is not None else "none"
-        _logger.info(
-            "transcribe request finished request_id=%s entry_id=%s wall_ms=%.1f "
-            "transcribe_ms=%.1f postprocess_ms=%s pipeline_total_ms=%.1f",
-            request_id,
-            result.id,
-            wall_ms,
-            result.transcribe_ms,
-            pp,
-            result.total_ms,
-        )
-        return result
+        return transcribe_wav_bytes(job, raw)
 
     @app.post("/api/postprocess", response_model=dict[str, str])
     def postprocess_only(body: dict[str, Any]) -> dict[str, str]:
@@ -232,22 +206,13 @@ def create_app() -> FastAPI:
         or_eff = str(body.get("postprocess_openrouter_reasoning_effort", "") or "").strip() or None
         if not post_model:
             raise HTTPException(status_code=400, detail="postprocess_model required.")
-        trace_id = str(uuid.uuid4())
-        out, prep_ms, api_ms, n_chunks = postprocess_transcript_text(
+        out, _, _, _ = postprocess_transcript_text(
             transcript=transcript,
             sys_prompt=sys_prompt,
             post_model=post_model,
             postprocess_provider=pprov,
             groq_reasoning_effort=groq_eff,
             openrouter_reasoning_effort=or_eff,
-            trace_id=trace_id,
-        )
-        _logger.info(
-            "postprocess_only id=%s prep_ms=%.1f api_ms=%.1f chunks=%d",
-            trace_id,
-            prep_ms,
-            api_ms,
-            n_chunks,
         )
         return {"processed": out}
 

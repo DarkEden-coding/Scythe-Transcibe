@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import logging
 import sys
 import threading
 import time
@@ -21,8 +20,6 @@ from scythe_transcribe.transcribe_pipeline import (
     transcribe_job_from_preferences,
     transcribe_wav_bytes,
 )
-
-_logger = logging.getLogger(__name__)
 
 _started = threading.Lock()
 _listener_started = False
@@ -186,12 +183,6 @@ def _run_hotkey_loop() -> None:
                     "hotkey_post_api_to_paste_ms": post_api_to_paste_ms,
                     "hotkey_paste_chord_ms": paste_chord_ms,
                 },
-            )
-            _logger.info(
-                "hotkey timing id=%s post_api_to_paste_ms=%.1f paste_chord_ms=%.1f",
-                result.id,
-                post_api_to_paste_ms,
-                paste_chord_ms,
             )
         except Exception:
             pass
