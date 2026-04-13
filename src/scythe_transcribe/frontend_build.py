@@ -67,7 +67,12 @@ def ensure_frontend_built() -> None:
 
     Skipped when ``SCYTHE_SKIP_FRONTEND_BUILD`` is ``1``/``true``/``yes``, or when no
     ``frontend/package.json`` exists (e.g. installed wheel without sources).
+
+    PyInstaller / frozen bundles always skip this: they ship ``web_dist`` and must not
+    invoke npm (missing Node, wrong paths, or long hangs).
     """
+    if getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS"):
+        return
     if os.environ.get("SCYTHE_SKIP_FRONTEND_BUILD", "").strip().lower() in (
         "1",
         "true",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -53,12 +54,17 @@ class RuntimeIconOverrideUpdate(BaseModel):
 def _static_root() -> Path | None:
     """Directory containing built SPA (index.html), or None."""
     pkg = Path(__file__).resolve().parent
+    bundled = pkg / "web_dist"
+    pyinstaller = getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS")
     # Prefer a Vite output tree from the repo over bundled ``web_dist`` so ``uv run``
     # picks up fresh builds without reinstalling the package.
-    repo_dist = pkg.parent.parent / "frontend" / "dist"
-    if repo_dist.is_dir() and (repo_dist / "index.html").is_file():
-        return repo_dist
-    bundled = pkg / "web_dist"
+    # PyInstaller builds must use packaged ``web_dist`` only: a stray ``frontend/dist``
+    # next to the exe (partial copy, missing ``assets/``) would break ``StaticFiles`` and
+    # prevent the API from starting.
+    if not pyinstaller:
+        repo_dist = pkg.parent.parent / "frontend" / "dist"
+        if repo_dist.is_dir() and (repo_dist / "index.html").is_file():
+            return repo_dist
     if bundled.is_dir() and (bundled / "index.html").is_file():
         return bundled
     return None
@@ -84,11 +90,13 @@ def create_app(frontend_activity: FrontendActivity | None = None) -> FastAPI:
 
     static_root = _static_root()
     if static_root is not None:
-        app.mount(
-            "/assets",
-            StaticFiles(directory=static_root / "assets"),
-            name="assets",
-        )
+        assets_dir = static_root / "assets"
+        if assets_dir.is_dir():
+            app.mount(
+                "/assets",
+                StaticFiles(directory=assets_dir),
+                name="assets",
+            )
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
