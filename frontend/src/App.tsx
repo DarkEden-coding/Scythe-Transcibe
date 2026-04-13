@@ -300,6 +300,8 @@ export function App() {
   const [keywordRows, setKeywordRows] = useState<KeywordRow[]>([]);
   const [startupEnabled, setStartupEnabled] = useState(false);
   const [startupLoading, setStartupLoading] = useState(false);
+  const [accessibilityTrusted, setAccessibilityTrusted] = useState(true);
+  const [accessibilitySupported, setAccessibilitySupported] = useState(false);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
 
@@ -374,6 +376,13 @@ export function App() {
           setStartupEnabled(su.enabled);
         } catch {
           /* startup endpoint may not be supported on this platform */
+        }
+        try {
+          const ax = await apiJson<{ supported: boolean; trusted: boolean }>("/api/accessibility");
+          setAccessibilitySupported(ax.supported);
+          setAccessibilityTrusted(ax.trusted);
+        } catch {
+          /* ignore */
         }
       } catch (e) {
         setStatus(`Load failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -651,6 +660,25 @@ export function App() {
                 Reset to default
               </button>
             </div>
+
+            {accessibilitySupported && !accessibilityTrusted && (
+              <>
+                <h2 className="section-title" style={{ marginTop: "1.5rem" }}>Accessibility permission</h2>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  This process is not trusted. Input event monitoring (hotkey) will not work until
+                  it is added to accessibility clients.
+                </p>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    void apiJson("/api/accessibility/open-settings", { method: "POST" });
+                  }}
+                >
+                  Open Accessibility Settings
+                </button>
+              </>
+            )}
 
             <h2 className="section-title" style={{ marginTop: "1.5rem" }}>Startup</h2>
             <div className="field-row" style={{ alignItems: "center" }}>

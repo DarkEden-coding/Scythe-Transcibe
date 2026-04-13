@@ -177,6 +177,43 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    @app.get("/api/accessibility")
+    def get_accessibility() -> dict[str, Any]:
+        """Return macOS accessibility trust status."""
+        import sys
+
+        if sys.platform != "darwin":
+            return {"supported": False, "trusted": True}
+        try:
+            import ctypes
+            import ctypes.util
+
+            lib_path = ctypes.util.find_library("ApplicationServices")
+            if not lib_path:
+                return {"supported": False, "trusted": True}
+            lib = ctypes.cdll.LoadLibrary(lib_path)
+            lib.AXIsProcessTrusted.restype = ctypes.c_bool
+            trusted: bool = lib.AXIsProcessTrusted()
+            return {"supported": True, "trusted": trusted}
+        except Exception:
+            return {"supported": False, "trusted": True}
+
+    @app.post("/api/accessibility/open-settings")
+    def open_accessibility_settings() -> dict[str, str]:
+        """Open macOS System Settings → Accessibility panel."""
+        import subprocess
+        import sys
+
+        if sys.platform != "darwin":
+            return {"status": "unsupported"}
+        subprocess.Popen(
+            [
+                "open",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            ]
+        )
+        return {"status": "ok"}
+
     @app.get("/api/startup")
     def get_startup() -> dict[str, bool]:
         """Return whether the app is registered to run at login."""
