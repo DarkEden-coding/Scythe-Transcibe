@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import http.server
+import logging
 import socketserver
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -17,6 +19,17 @@ if TYPE_CHECKING:
     import uvicorn
 
 FRONTEND_IDLE_UNLOAD_SECONDS = 5 * 60
+
+
+def _uvicorn_use_colors() -> bool | None:
+    """Return ``False`` when stdio is missing so Uvicorn logging setup does not call ``isatty``.
+
+    PyInstaller ``console=False`` builds set ``sys.stdout`` / ``sys.stderr`` to ``None``;
+    Uvicorn's default formatters otherwise raise ``AttributeError`` during ``Config()``.
+    """
+    if sys.stdout is None or sys.stderr is None:
+        return False
+    return None
 
 
 class _ReusableThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -94,34 +107,58 @@ class LocalHttpServer:
 
     def start(self) -> None:
         """Start Uvicorn if not already running."""
+        log = logging.getLogger(__name__)
         with self._lock:
             if not self._enabled or self.is_running:
+                log.debug(
+                    "LocalHttpServer.start skipped (enabled=%s is_running=%s)",
+                    self._enabled,
+                    self.is_running,
+                )
                 return
             self._stop_wake_listener_locked()
 
-            import uvicorn
+            try:
+                import uvicorn
 
-            from scythe_transcribe.frontend_build import ensure_frontend_built
-            from scythe_transcribe.web_app import create_app
+                from scythe_transcribe.frontend_build import ensure_frontend_built
+                from scythe_transcribe.web_app import create_app
 
-            ensure_frontend_built()
-            self._activity.reset_idle_clock()
-            app = create_app(frontend_activity=self._activity)
-            config = uvicorn.Config(
-                app,
-                host=API_HOST,
-                port=API_PORT,
-                log_level="warning",
+                ensure_frontend_built()
+                self._activity.reset_idle_clock()
+                app = create_app(frontend_activity=self._activity)
+                config = uvicorn.Config(
+                    app,
+                    host=API_HOST,
+                    port=API_PORT,
+                    log_level="warning",
+                    use_colors=_uvicorn_use_colors(),
+                )
+                self._server = uvicorn.Server(config)
+                self._thread = threading.Thread(
+                    target=self._server.run,
+                    daemon=True,
+                    name="scythe-uvicorn",
+                )
+                self._thread.start()
+                self._wait_until_started_locked()
+                self._ensure_monitor_locked()
+            except Exception:
+                log.exception("LocalHttpServer.start failed")
+                raise
+            if self._server is not None and not self._server.started:
+                log.error(
+                    "Uvicorn did not report started within deadline (thread_alive=%s)",
+                    self._thread.is_alive() if self._thread else None,
+                )
+            if self._thread is not None and not self._thread.is_alive():
+                log.error("Uvicorn worker thread exited before or during startup wait")
+            log.info(
+                "LocalHttpServer listening on http://%s:%s/ (started=%s)",
+                API_HOST,
+                API_PORT,
+                getattr(self._server, "started", None) if self._server else None,
             )
-            self._server = uvicorn.Server(config)
-            self._thread = threading.Thread(
-                target=self._server.run,
-                daemon=True,
-                name="scythe-uvicorn",
-            )
-            self._thread.start()
-            self._wait_until_started_locked()
-            self._ensure_monitor_locked()
 
     def start_wake_listener(self) -> None:
         """Listen with a lightweight server that wakes Uvicorn on the next request."""
@@ -232,4 +269,10 @@ def run_foreground() -> None:
     ensure_frontend_built()
     start_hotkey_listener()
     app = create_app()
-    uvicorn.run(app, host=API_HOST, port=API_PORT, log_level="info")
+    uvicorn.run(
+        app,
+        host=API_HOST,
+        port=API_PORT,
+        log_level="info",
+        use_colors=_uvicorn_use_colors(),
+    )
