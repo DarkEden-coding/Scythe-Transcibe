@@ -214,29 +214,42 @@ def create_app(frontend_activity: FrontendActivity | None = None) -> FastAPI:
 
     @app.get("/api/accessibility")
     def get_accessibility() -> dict[str, Any]:
-        """Return macOS accessibility trust status."""
+        """Return macOS privacy trust status for hotkey listening/pasting."""
         import sys
 
         if sys.platform != "darwin":
-            return {"supported": False, "trusted": True, "hotkey": {"state": "unsupported"}}
+            return {
+                "supported": False,
+                "trusted": True,
+                "input_monitoring_trusted": True,
+                "hotkey": {"state": "unsupported"},
+            }
         try:
             from scythe_transcribe.hotkey_service import (
                 current_app_identity,
                 get_hotkey_listener_status,
                 is_accessibility_trusted,
+                is_input_monitoring_trusted,
                 start_hotkey_listener,
             )
 
             start_hotkey_listener()
             trusted = is_accessibility_trusted()
+            input_monitoring_trusted = is_input_monitoring_trusted()
             return {
                 "supported": True,
                 "trusted": trusted,
+                "input_monitoring_trusted": input_monitoring_trusted,
                 "hotkey": get_hotkey_listener_status(),
                 "identity": current_app_identity(),
             }
         except Exception:
-            return {"supported": False, "trusted": True, "hotkey": {"state": "unknown"}}
+            return {
+                "supported": False,
+                "trusted": True,
+                "input_monitoring_trusted": True,
+                "hotkey": {"state": "unknown"},
+            }
 
     @app.get("/api/runtime-state")
     def get_runtime_state() -> dict[str, Any]:
@@ -276,7 +289,7 @@ def create_app(frontend_activity: FrontendActivity | None = None) -> FastAPI:
 
     @app.post("/api/accessibility/open-settings")
     def open_accessibility_settings() -> dict[str, str]:
-        """Open macOS System Settings → Accessibility panel."""
+        """Open macOS System Settings → Accessibility and prompt if possible."""
         import subprocess
         import sys
 
@@ -288,13 +301,31 @@ def create_app(frontend_activity: FrontendActivity | None = None) -> FastAPI:
             request_accessibility_trust_prompt()
         except Exception:
             pass
+        panel = "Privacy_Accessibility"
         subprocess.Popen(
-            [
-                "open",
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-            ]
+            ["open", f"x-apple.systempreferences:com.apple.preference.security?{panel}"]
         )
-        return {"status": "ok"}
+        return {"status": "ok", "panel": panel}
+
+    @app.post("/api/input-monitoring/open-settings")
+    def open_input_monitoring_settings() -> dict[str, str]:
+        """Open macOS System Settings → Input Monitoring and prompt if possible."""
+        import subprocess
+        import sys
+
+        if sys.platform != "darwin":
+            return {"status": "unsupported"}
+        try:
+            from scythe_transcribe.hotkey_service import request_input_monitoring_trust_prompt
+
+            request_input_monitoring_trust_prompt()
+        except Exception:
+            pass
+        panel = "Privacy_ListenEvent"
+        subprocess.Popen(
+            ["open", f"x-apple.systempreferences:com.apple.preference.security?{panel}"]
+        )
+        return {"status": "ok", "panel": panel}
 
     @app.get("/api/startup")
     def get_startup() -> dict[str, bool]:

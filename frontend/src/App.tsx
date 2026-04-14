@@ -14,6 +14,7 @@ type HotkeyDiagnostics = {
   state?: string;
   error?: string | null;
   accessibility_trusted?: boolean;
+  input_monitoring_trusted?: boolean;
   capture_state?: RuntimeIconState | string;
   configured_combo?: string;
   combo_parts?: string[];
@@ -261,14 +262,35 @@ function isOnlyModifiersCombo(combo: string): boolean {
   return combo.split("+").every((p) => MODIFIER_KEYS.has(p));
 }
 
+function isApplePlatform(): boolean {
+  return /Mac|iPhone|iPad|iPod/i.test(
+    typeof navigator !== "undefined" ? navigator.platform : "",
+  );
+}
+
+function hotkeyConflictWarning(combo: string): string | null {
+  const parts = combo
+    .split("+")
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean);
+  if (!parts.length || !isApplePlatform()) return null;
+  const joined = parts.join("+");
+  if (joined === "meta+space") {
+    return "Cmd+Space is Spotlight on macOS by default, so the OS usually consumes it before Scythe can use it. Disable/remap Spotlight or choose another shortcut.";
+  }
+  if (joined === "ctrl+space") {
+    return "Ctrl+Space is commonly used by macOS Input Source switching, which can steal the shortcut before Scythe sees it.";
+  }
+  if (joined === "meta+tab") {
+    return "Cmd+Tab is the macOS app switcher and is effectively unavailable as a Scythe hotkey.";
+  }
+  return null;
+}
+
 function formatHotkeyLabel(combo: string): string {
   const t = combo.trim();
   if (!t) return "None";
-  const metaName = /Mac|iPhone|iPad|iPod/i.test(
-    typeof navigator !== "undefined" ? navigator.platform : "",
-  )
-    ? "Cmd"
-    : "Win";
+  const metaName = isApplePlatform() ? "Cmd" : "Win";
   return t
     .split("+")
     .map((p) => {
@@ -413,6 +435,7 @@ export function App() {
   const [startupEnabled, setStartupEnabled] = useState(false);
   const [startupLoading, setStartupLoading] = useState(false);
   const [accessibilityTrusted, setAccessibilityTrusted] = useState(true);
+  const [inputMonitoringTrusted, setInputMonitoringTrusted] = useState(true);
   const [accessibilitySupported, setAccessibilitySupported] = useState(false);
   const [accessibilityIdentity, setAccessibilityIdentity] =
     useState<AccessibilityIdentity | null>(null);
@@ -450,10 +473,12 @@ export function App() {
       const ax = await apiJson<{
         supported: boolean;
         trusted: boolean;
+        input_monitoring_trusted?: boolean;
         identity?: AccessibilityIdentity;
       }>("/api/accessibility");
       setAccessibilitySupported(ax.supported);
       setAccessibilityTrusted(ax.trusted);
+      setInputMonitoringTrusted(ax.input_monitoring_trusted ?? true);
       setAccessibilityIdentity(ax.identity ?? null);
     } catch {
       /* accessibility endpoint may not be supported on this platform */
@@ -771,9 +796,12 @@ export function App() {
   const toolbarIconPreviewLabel =
     osIconOverride === null ? "Follow backend" : formatRuntimeIconState(osIconOverride);
   const hotkeyDiagnostics = runtimeState?.hotkey;
+  const hotkeyConflict = hotkeyConflictWarning(prefs.hotkey_toggle_recording);
   const osIconStatus = runtimeState?.os_icon;
   const accessibilityGrantTarget =
     accessibilityIdentity?.app_bundle ?? accessibilityIdentity?.executable ?? "";
+  const needsPrivacyPermission =
+    accessibilitySupported && (!accessibilityTrusted || !inputMonitoringTrusted);
 
   const groqModelInDefaults = GROQ_STT_DEFAULTS.includes(
     prefs.transcription_model_groq as (typeof GROQ_STT_DEFAULTS)[number],
@@ -840,8 +868,9 @@ export function App() {
             <p className="muted">
               The desktop process captures this shortcut globally (hold to record, release to
               transcribe, post-process if enabled, then paste at the text cursor). Keep the settings
-              server running from the tray app. Win/Meta combos may still be taken by the OS before
-              Scythe sees them. Press Esc to cancel capture.
+              server running from the tray app. OS-level shortcuts can still win first: on macOS,
+              Cmd+Space is Spotlight by default and Ctrl+Space is often Input Source switching.
+              Browser focus does not bypass those OS shortcuts. Press Esc to cancel capture.
             </p>
             <div className="field-row field-row--shortcut">
               <label className="flex-240">
@@ -883,31 +912,61 @@ export function App() {
                 Reset to default
               </button>
             </div>
+            {hotkeyConflict && (
+              <p className="muted" style={{ color: "#ffb300", marginTop: "var(--space-2)" }}>
+                {hotkeyConflict}
+              </p>
+            )}
 
-            {accessibilitySupported && !accessibilityTrusted && (
+            {needsPrivacyPermission && (
               <>
-                <h2 className="section-title section-title--spaced">Accessibility permission</h2>
+                <h2 className="section-title section-title--spaced">macOS privacy permissions</h2>
                 <p className="muted">
-                  macOS is not trusting the running Scythe-Transcribe process. Global hotkeys will
-                  start automatically after Accessibility is granted for this app.
+                  Scythe needs Input Monitoring to see global hotkeys and Accessibility to paste the
+                  transcript back into other apps. If Input Monitoring is missing, the listener may
+                  show a session-tap fallback and still receive no key events.
+                </p>
+                <p className="muted">
+                  Input Monitoring granted: {inputMonitoringTrusted ? "Yes" : "No"} ·
+                  Accessibility granted: {accessibilityTrusted ? "Yes" : "No"}
                 </p>
                 {accessibilityGrantTarget && (
                   <p className="muted">
                     Current app: <code>{accessibilityGrantTarget}</code>
                   </p>
                 )}
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={() => {
-                    void (async () => {
-                      await apiJson("/api/accessibility/open-settings", { method: "POST" });
-                      window.setTimeout(() => void refreshAccessibility(), 1000);
-                    })();
-                  }}
-                >
-                  Open Accessibility Settings
-                </button>
+                <div className="panel-keys-actions">
+                  {!inputMonitoringTrusted && (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        void (async () => {
+                          await apiJson("/api/input-monitoring/open-settings", {
+                            method: "POST",
+                          });
+                          window.setTimeout(() => void refreshAccessibility(), 1000);
+                        })();
+                      }}
+                    >
+                      Open Input Monitoring Settings
+                    </button>
+                  )}
+                  {!accessibilityTrusted && (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        void (async () => {
+                          await apiJson("/api/accessibility/open-settings", { method: "POST" });
+                          window.setTimeout(() => void refreshAccessibility(), 1000);
+                        })();
+                      }}
+                    >
+                      Open Accessibility Settings
+                    </button>
+                  )}
+                </div>
               </>
             )}
 
@@ -981,6 +1040,10 @@ export function App() {
               <div className="diagnostic-item">
                 <span className="field-inline-label">Accessibility trusted</span>
                 <strong>{formatDiagnosticBool(hotkeyDiagnostics?.accessibility_trusted)}</strong>
+              </div>
+              <div className="diagnostic-item">
+                <span className="field-inline-label">Input Monitoring trusted</span>
+                <strong>{formatDiagnosticBool(hotkeyDiagnostics?.input_monitoring_trusted)}</strong>
               </div>
               <div className="diagnostic-item">
                 <span className="field-inline-label">Secure input</span>

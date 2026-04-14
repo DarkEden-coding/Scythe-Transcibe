@@ -126,6 +126,20 @@ def is_secure_input_enabled() -> bool:
         return False
 
 
+
+def is_input_monitoring_trusted() -> bool:
+    """Return whether macOS Input Monitoring allows global keyboard listening."""
+    if sys.platform != "darwin":
+        return True
+    try:
+        from Quartz import CGPreflightListenEventAccess
+
+        return bool(CGPreflightListenEventAccess())
+    except Exception:
+        return True
+
+
+
 def request_accessibility_trust_prompt() -> bool:
     """Ask macOS to prompt for Accessibility trust for this process."""
     if sys.platform != "darwin":
@@ -138,11 +152,41 @@ def request_accessibility_trust_prompt() -> bool:
         return is_accessibility_trusted()
 
 
+
+def request_input_monitoring_trust_prompt() -> bool:
+    """Ask macOS to prompt for Input Monitoring trust for this process."""
+    if sys.platform != "darwin":
+        return True
+    try:
+        from Quartz import CGRequestListenEventAccess
+
+        return bool(CGRequestListenEventAccess())
+    except Exception:
+        return is_input_monitoring_trusted()
+
+
+
+def _refresh_configured_combo_status() -> tuple[str, list[str]]:
+    """Mirror the persisted hotkey combo into listener diagnostics."""
+    configured_combo = load_preferences().hotkey_toggle_recording
+    combo_parts = _parse_hotkey_combo(configured_combo)
+    with _status_lock:
+        _listener_status.update(
+            {
+                "configured_combo": configured_combo,
+                "combo_parts": list(combo_parts),
+            }
+        )
+    return configured_combo, combo_parts
+
+
 def get_hotkey_listener_status() -> dict[str, Any]:
     """Return diagnostic state for the background hotkey listener."""
+    _refresh_configured_combo_status()
     with _status_lock:
         status = dict(_listener_status)
     status["accessibility_trusted"] = is_accessibility_trusted()
+    status["input_monitoring_trusted"] = is_input_monitoring_trusted()
     status["secure_input_enabled"] = is_secure_input_enabled()
     return status
 
@@ -255,6 +299,16 @@ def _record_recording_boundary(name: str) -> None:
         _listener_status[name] = time.time()
 
 
+def _darwin_event_tap_is_enabled(tap: object | None) -> bool:
+    """Return whether a macOS Quartz event tap can actually be enabled."""
+    if tap is None:
+        return False
+    from Quartz import CGEventTapEnable, CGEventTapIsEnabled
+
+    CGEventTapEnable(tap, True)
+    return bool(CGEventTapIsEnabled(tap))
+
+
 def _ensure_keyboard_api() -> dict[str, Any]:
     """Import pynput and build keyboard lookup tables on first actual use."""
     if _keyboard_api:
@@ -292,7 +346,7 @@ def _ensure_keyboard_api() -> dict[str, Any]:
                             self._handler,
                             None,
                         )
-                        if tap is not None:
+                        if _darwin_event_tap_is_enabled(tap):
                             _set_listener_backend(self._SCYTHE_BACKEND)
                             return tap
                         _set_listener_backend(
@@ -457,6 +511,7 @@ def _run_hotkey_loop() -> None:
     transcribing = threading.Event()
     suppress_until: list[float] = [0.0]
     _set_capture_state("idle")
+    _refresh_configured_combo_status()
     set_icon_state("idle")
 
     def is_suppressed() -> bool:
@@ -542,8 +597,8 @@ def _run_hotkey_loop() -> None:
             return
         if transcribing.is_set():
             return
-        configured_combo = load_preferences().hotkey_toggle_recording
-        combo_parts[:] = _parse_hotkey_combo(configured_combo)
+        configured_combo, current_combo_parts = _refresh_configured_combo_status()
+        combo_parts[:] = current_combo_parts
         tok = _key_event_token(key)
         if not tok:
             _record_hotkey_event(
@@ -600,8 +655,8 @@ def _run_hotkey_loop() -> None:
         nonlocal prev_active
         if is_suppressed():
             return
-        configured_combo = load_preferences().hotkey_toggle_recording
-        combo_parts[:] = _parse_hotkey_combo(configured_combo)
+        configured_combo, current_combo_parts = _refresh_configured_combo_status()
+        combo_parts[:] = current_combo_parts
         tok = _key_event_token(key)
         if not tok:
             _record_hotkey_event(
@@ -651,8 +706,13 @@ def _run_hotkey_loop() -> None:
 
 
 def _run_hotkey_manager() -> None:
-    """Keep the hotkey listener alive once macOS Accessibility allows it."""
+    """Keep the hotkey listener alive once macOS privacy permissions allow it."""
     while True:
+        if not is_input_monitoring_trusted():
+            _set_listener_status("waiting_for_input_monitoring")
+            _set_capture_state("idle")
+            time.sleep(_HOTKEY_RETRY_SECONDS)
+            continue
         if not is_accessibility_trusted():
             _set_listener_status("waiting_for_accessibility")
             _set_capture_state("idle")
